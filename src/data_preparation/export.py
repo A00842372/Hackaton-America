@@ -1,15 +1,14 @@
 import json
 import math
-import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 import numpy as np
 import pandas as pd
 
 from src.data_preparation.plays import (
-    _extraer_nombre,
     es_jugada_elegible,
-    extraer_secuencias_posesion,
+    extraer_secuencias_candidatas,
+    obtener_equipo_protagonista,
 )
 
 
@@ -61,14 +60,13 @@ def exportar_jugadas_partido(
                 f"Ya existe el directorio de exportación para el partido: {dir_partido}. "
                 f"Active sobrescribir=True para reemplazar los resultados."
             )
-        # Limpiar si se permite sobrescribir
         for f in dir_partido.glob("*.json"):
             f.unlink()
     else:
         dir_partido.mkdir(parents=True, exist_ok=True)
 
     columnas_originales = list(df_eventos.columns)
-    secuencias_candidatas, eventos_no_exportados = extraer_secuencias_posesion(df_eventos)
+    secuencias_candidatas, eventos_no_exportados = extraer_secuencias_candidatas(df_eventos)
 
     jugadas_manifiesto: List[Dict[str, Any]] = []
     total_eventos_exportados = 0
@@ -84,18 +82,8 @@ def exportar_jugadas_partido(
             ruta_archivo = dir_partido / archivo_nombre
             play_id = f"c{competicion_id}_t{temporada_id}_m{partido_id}_p{play_num:04d}"
 
-            # Determinar protagonista
-            protagonista = None
-            if "possession_team" in secuencia.columns:
-                for v in secuencia["possession_team"]:
-                    nom = _extraer_nombre(v)
-                    if nom:
-                        protagonista = nom
-                        break
-            if not protagonista and "team" in secuencia.columns:
-                protagonista = _extraer_nombre(secuencia["team"].iloc[0])
+            protagonista = obtener_equipo_protagonista(secuencia)
 
-            # Preparar datos tabulares orient="split"
             filas_serializadas = []
             for _, row in secuencia[columnas_originales].iterrows():
                 fila_dict = {col: _sanitizar_para_json(row[col]) for col in columnas_originales}
@@ -127,6 +115,7 @@ def exportar_jugadas_partido(
                 "primer_index": int(secuencia.iloc[0].get("index", 0)),
                 "ultimo_index": int(secuencia.iloc[-1].get("index", 0)),
                 "posesiones_origen": posesiones_origen,
+                "intervenciones_rivales_absorbidas": [],
                 "pases_completados": pases,
                 "total_eventos": len(secuencia),
             })

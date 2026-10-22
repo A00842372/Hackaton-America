@@ -36,7 +36,7 @@ def cargar_eventos_partido(ruta_archivo: Union[str, Path]) -> pd.DataFrame:
             )
 
         event_match_id = event.get("match_id")
-        if expected_match_id is not None and event_match_id is not None and event_match_id != expected_match_id:
+        if expected_match_id is not None and event_match_id != expected_match_id:
             raise ValueError(
                 f"Discrepancia de match_id: el evento {event_id} tiene match_id={event_match_id}, "
                 f"pero el archivo es {path.name} (esperado {expected_match_id})."
