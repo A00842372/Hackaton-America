@@ -1,14 +1,19 @@
 from typing import Any, Dict, List, Optional, Tuple, Union
 import pandas as pd
+from src.data_preparation.interventions import Tramo, unir_intervenciones_cortas
 
-ADMINISTRATIVE_EVENT_TYPES = {
-    "Starting XI",
-    "Half Start",
-    "Half End",
-    "Camera On",
-    "Camera off",
+STOP_ADMINISTRATIVE_EVENT_TYPES = {
+    "Half Start", "Half End", "Injury Stoppage", "Substitution",
     "Referee Ball-Drop",
+    "Player Off", "Player On", "Bad Behaviour",
 }
+ADMINISTRATIVE_EVENT_TYPES = STOP_ADMINISTRATIVE_EVENT_TYPES | {
+    "Starting XI", "Camera On", "Camera off", "Tactical Shift",
+}
+STOP_EVENT_TYPES = STOP_ADMINISTRATIVE_EVENT_TYPES | {"Offside"}
+RESTART_PASS_TYPES = {"Throw-in", "Goal Kick", "Corner", "Free Kick", "Kick Off"}
+STOP_SHOT_OUTCOMES = {"Goal", "Off T", "Wayward"}
+FOUL_TYPES = {"Foul Committed", "Foul Won"}
 
 
 def _extraer_nombre_entidad(val: Any) -> Optional[str]:
@@ -92,59 +97,94 @@ def es_jugada_elegible(df_secuencia: pd.DataFrame, min_pases: int = 3) -> Tuple[
 
 def extraer_secuencias_candidatas(
     df_eventos: pd.DataFrame,
+    max_segundos_intervencion: float = 3,
+    max_acciones_intervencion: int = 3,
 ) -> Tuple[List[pd.DataFrame], List[Dict[str, str]]]:
-    """Extrae secuencias candidatas simples agrupadas por bloques contiguos de posesión base.
-    
-    Agrupa cronológicamente respetando transiciones de periodo y posesión. Los eventos
-    administrativos que no forman jugadas se excluyen y se registran en la lista de
-    eventos no exportados con su motivo.
+    """Delimita candidatas por control, salidas, detenciones y reanudaciones.
+
+    El poseedor de cada evento es ``possession_team``; una acción defensiva de
+    otro ``team`` no cambia el protagonista. Un cambio de ``possession`` del
+    mismo equipo no corta una jugada si el balón siguió en juego. Las
+    intervenciones rivales se absorben cuando cumplen ambos límites sin cruzar
+    un cierre de juego.
     """
     if df_eventos.empty:
         return [], []
 
     eventos_no_exportados: List[Dict[str, str]] = []
-    secuencias: List[pd.DataFrame] = []
+    tramos: List[Tramo] = []
 
-    filas_jugables = []
-    for _, row in df_eventos.iterrows():
+    columnas_orden = [col for col in ("match_id", "period", "index") if col in df_eventos]
+    ordenados = df_eventos.sort_values(columnas_orden, kind="stable").reset_index(drop=True)
+    bloque_actual: List[int] = []
+    clave_actual: Optional[Tuple[Any, Any, Any]] = None
+    cierre_pendiente = False
+    ultimo_tipo: Optional[str] = None
+    ultimo_timestamp: Any = None
+
+    def cerrar_bloque(barrera: bool) -> None:
+        if bloque_actual:
+            tramos.append(Tramo(
+                eventos=ordenados.iloc[bloque_actual].reset_index(drop=True),
+                barrera_despues=barrera,
+                protagonista=clave_actual[2] if clave_actual else None,
+            ))
+            bloque_actual.clear()
+
+    for posicion, row in ordenados.iterrows():
         tipo = _extraer_nombre_entidad(row.get("type"))
         if tipo in ADMINISTRATIVE_EVENT_TYPES:
             eventos_no_exportados.append({
-                "id": str(row.get("id")),
-                "motivo": "evento_administrativo",
+                "id": str(row.get("id")), "motivo": "evento_administrativo"
             })
-        else:
-            filas_jugables.append(row)
+            if tipo in STOP_EVENT_TYPES:
+                cerrar_bloque(True)
+                cierre_pendiente = False
+                clave_actual = None
+            continue
 
-    if not filas_jugables:
-        return [], eventos_no_exportados
+        poseedor = _extraer_nombre_entidad(row.get("possession_team"))
+        if poseedor is None:
+            poseedor = _extraer_nombre_entidad(row.get("team"))
+        clave = (row.get("match_id"), row.get("period"), poseedor)
+        pase = row.get("pass") if isinstance(row.get("pass"), dict) else {}
+        tiro = row.get("shot") if isinstance(row.get("shot"), dict) else {}
+        reinicio = (
+            tipo == "Pass" and _extraer_nombre_entidad(pase.get("type")) in RESTART_PASS_TYPES
+        ) or (
+            tipo == "Shot" and _extraer_nombre_entidad(tiro.get("type")) in {"Free Kick", "Penalty"}
+        )
+        # StatsBomb registra la falta cometida y la recibida como dos filas del
+        # mismo lance; el cierre se aplica después de conservar ambas.
+        pareja_falta = (
+            cierre_pendiente and tipo in FOUL_TYPES and ultimo_tipo in FOUL_TYPES
+            and row.get("timestamp") == ultimo_timestamp
+        )
 
-    df_jugables = pd.DataFrame(filas_jugables).reset_index(drop=True)
+        if bloque_actual and (clave != clave_actual or reinicio or (cierre_pendiente and not pareja_falta)):
+            barrera = clave[:2] != clave_actual[:2] or reinicio or cierre_pendiente
+            cerrar_bloque(barrera)
 
-    # Agrupar por bloques contiguos de (period, possession) para evitar unir apariciones no contiguas
-    bloque_actual: List[Dict[str, Any]] = []
-    clave_actual: Optional[Tuple[Any, Any]] = None
+        bloque_actual.append(posicion)
+        clave_actual = clave
+        ultimo_tipo = tipo
+        ultimo_timestamp = row.get("timestamp")
 
-    for _, row in df_jugables.iterrows():
-        periodo = row.get("period", 1)
-        posesion = row.get("possession", 0)
-        clave = (periodo, posesion)
+        falta = row.get("foul_committed") if tipo == "Foul Committed" else row.get("foul_won")
+        ventaja = isinstance(falta, dict) and falta.get("advantage") is True
+        cierre_pendiente = (
+            (tipo in FOUL_TYPES and not ventaja)
+            or tipo in STOP_EVENT_TYPES
+            or row.get("out") is True
+            or (tipo == "Pass" and _extraer_nombre_entidad(pase.get("outcome")) == "Out")
+            or (tipo == "Shot" and _extraer_nombre_entidad(tiro.get("outcome")) in STOP_SHOT_OUTCOMES)
+        )
 
-        if clave_actual is None:
-            clave_actual = clave
-            bloque_actual.append(row.to_dict())
-        elif clave == clave_actual:
-            bloque_actual.append(row.to_dict())
-        else:
-            if bloque_actual:
-                secuencias.append(pd.DataFrame(bloque_actual).reset_index(drop=True))
-            clave_actual = clave
-            bloque_actual = [row.to_dict()]
+    cerrar_bloque(True)
 
-    if bloque_actual:
-        secuencias.append(pd.DataFrame(bloque_actual).reset_index(drop=True))
-
-    return secuencias, eventos_no_exportados
+    return unir_intervenciones_cortas(
+        tramos, max_segundos_intervencion, max_acciones_intervencion,
+    ), eventos_no_exportados
 
 
 # Alias de compatibilidad

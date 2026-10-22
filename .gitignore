@@ -4,4 +4,5 @@
 __pycache__/
 datos_statsbomb/
 datos_preparados/
+datos_preparados_corpus/
 .pytest_cache/
