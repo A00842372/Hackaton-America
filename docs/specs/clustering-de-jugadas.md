@@ -1,6 +1,7 @@
 # Segmentación y clustering de jugadas sostenidas
 
 Fecha: 21 de octubre de 2026.
+Revisión: 22 de octubre de 2026; se precisa la entrega de la segmentación en `Data_Preparation.IPYNB`.
 
 Estado: contexto y diseño funcional confirmados por el usuario. Publicada como [issue #1](https://github.com/A00842372/Hackaton-America/issues/1), con la etiqueta ready-for-agent. Las decisiones de pruebas que se proponen abajo requieren revisión; no se presentan como acuerdos previos.
 
@@ -50,6 +51,8 @@ Desarrollar posteriormente un complemento con datos 360 para describir o subdivi
 28. Como analista, quiero medir distancias a defensores y espacio disponible cuando existan datos 360 para enriquecer la interpretación táctica.
 29. Como analista, quiero conservar la etiqueta principal al añadir el complemento espacial para mantener comparabilidad entre jugadas con y sin 360.
 30. Como analista, quiero comparar resultados y cobertura por temporada para detectar diferencias del conjunto y revisar la estabilidad de los patrones.
+31. Como analista, quiero guardar por separado cada jugada que cumpla los requisitos de continuidad y el mínimo de tres pases completados del protagonista, para analizar únicamente las secuencias seleccionadas por esta especificación.
+32. Como analista, quiero recuperar todas las columnas originales de los eventos de cada jugada guardada y localizarla por competición, temporada y partido.
 
 ## Implementation Decisions
 
@@ -58,8 +61,9 @@ Desarrollar posteriormente un complemento con datos 360 para describir o subdivi
 - Un evento es un registro original de StatsBomb. Una acción futbolística puede producir varios registros asociados; el límite de acciones no equivale a contar filas.
 - Una posesión base es un bloque identificado por partido, periodo y possession. El equipo poseedor se obtiene de possession_team.
 - Una jugada es la secuencia resultante de aplicar las reglas de continuidad y cierre. El equipo protagonista es aquel cuya secuencia sostenida se está representando.
-- Una jugada elegible contiene al menos tres pases completados del protagonista después de segmentar y resolver las uniones.
-- El proyecto contiene un notebook de exploración y descarga, y datos locales de eventos y 360. No se encontró una interfaz existente de segmentación o clustering ni una suite automatizada de pruebas.
+- Una jugada elegible contiene al menos tres pases completados del protagonista después de segmentar y resolver las uniones. El vocabulario de dominio se recoge también en `CONTEXT.md`.
+- La segmentación produce secuencias candidatas; después de resolver la continuidad, solo las jugadas elegibles se guardan y entran a la clasificación principal. Las candidatas con menos de tres pases completados del protagonista se contabilizan, pero no se guardan como archivos de jugada.
+- El proyecto contiene un notebook de exploración y descarga, datos locales de eventos y 360, y `Data_Preparation.IPYNB` aún sin código. No se encontró una interfaz existente de segmentación o clustering ni una suite automatizada de pruebas.
 
 ### Construcción de jugadas
 
@@ -73,7 +77,7 @@ Desarrollar posteriormente un complemento con datos 360 para describir o subdivi
 - Si el rival conserva el balón más allá de cualquiera de los límites o no se produce el retorno permitido, separar las secuencias y evaluar cada una con el filtro de elegibilidad.
 - Una salida, una detención efectiva o un cambio de periodo cierra la continuidad, aunque el mismo equipo reanude. Una falta con ventaja no equivale automáticamente a una detención.
 - Resolver la continuidad antes de filtrar por pases y antes de filtrar por cobertura 360. Conservar la cronología completa para identificar pérdidas e interrupciones.
-- Exigir al menos tres pases completados del protagonista; los pases incompletos, las recepciones, las conducciones y los pases rivales no incrementan ese contador.
+- Para guardar y clasificar una jugada, exigir al menos tres pases completados del protagonista; los pases incompletos, las recepciones, las conducciones y los pases rivales no incrementan ese contador.
 - En los JSON inspeccionados, un pase completado se reconoce por ausencia de pass.outcome. Adaptar la lectura de datos normalizados a esa semántica, distinguiendo campos ausentes de información corrupta.
 - No inferir balón dividido únicamente de is_controlled_possession=False o control_degree=0: la inspección mostró acciones con balón y posesión controlada en esos casos.
 - Conservar play_pattern como contexto. No utilizar sus categorías como identificadores únicos de jugada, ni los números de possession como variables numéricas de similitud.
@@ -90,7 +94,30 @@ Desarrollar posteriormente un complemento con datos 360 para describir o subdivi
 - Los nombres de grupos se obtendrán de la revisión de sus miembros. Los ejemplos discutidos son orientativos, no una taxonomía predefinida.
 - El algoritmo, la representación numérica exacta, los pesos, el número de grupos y los criterios cuantitativos de ajuste todavía no están seleccionados. K-means fue una alternativa discutida, no una decisión cerrada.
 - El componente analítico debe poder ejecutarse a partir de eventos locales sin depender de la descarga ni del estado interactivo del notebook. La organización concreta de módulos se decidirá durante la implementación.
-- La salida debe vincular cada jugada con su partido, periodo, protagonista, intervalo, eventos y posesiones de origen, cantidad de pases completados y asignación principal. Registrar parámetros y transformaciones para poder reproducir el resultado.
+- La salida de segmentación debe vincular cada jugada elegible guardada con su partido, periodo, protagonista, intervalo, eventos y posesiones de origen, y cantidad de pases completados. La clasificación posterior debe vincular su asignación principal con esas mismas jugadas. Registrar parámetros y transformaciones para poder reproducir ambos resultados.
+
+### Entrega en `Data_Preparation.IPYNB`
+
+- El notebook debe poder ejecutarse de principio a fin a partir de los archivos locales, sin credenciales ni variables creadas en `EDA.IPYNB`. Debe descubrir `datos_statsbomb/competicion_*/temporada_*/eventos/<match_id>.json` y procesar cada archivo de eventos disponible; `partidos.json` puede aportar nombres y fechas, pero su ausencia no debe impedir la segmentación.
+- Los archivos locales de eventos son diccionarios JSON cuyas claves son identificadores de evento y cuyos valores son registros. Construir para cada partido `df_eventos` con todos esos registros y todas sus columnas; ese DataFrame es la referencia de integridad para sus jugadas. Validar la concordancia entre la clave, el campo `id` del registro y el `match_id` del nombre de archivo antes de guardar resultados. Si un DataFrame de otra procedencia se usa como entrada, declarar su esquema como referencia antes de segmentar.
+- Segmentar sobre el DataFrame completo de cada partido, ordenado por `period` e `index`, con `id` como identificador de evento. Conservar el orden original de las columnas y el valor de cada celda en los subconjuntos de jugada. Resolver la continuidad antes de contar pases; la falta de 360 no impide guardar una jugada que cumple el mínimo de pases.
+- Guardar **solo las jugadas elegibles**, una por archivo, después de aplicar todas las reglas de continuidad y exigir al menos tres pases completados del protagonista. Una secuencia candidata con menos de tres pases no genera archivo de jugada. Los registros administrativos ajenos al juego, como `Starting XI` o `Half Start`, no forman jugadas: contabilizarlos aparte y documentar qué tipos se excluyen, sin dejar de usar los marcadores de inicio y fin de periodo para cerrar la continuidad. Cada evento de una jugada guardada debe figurar una sola vez entre sus archivos, incluso cuando se absorbe una intervención rival. Los eventos no exportados deben figurar en la auditoría con su identificador y motivo; no se permite descartarlos silenciosamente.
+- Usar JSON tabular válido para cada jugada, con la lista explícita de columnas en su orden original y las filas ordenadas cronológicamente (por ejemplo, `orient="split"` o una estructura equivalente). Al recargarlo se deben recuperar todas las columnas de `df_eventos`, incluidos datos anidados; no convertir diccionarios o listas a cadenas ni redondear deliberadamente valores numéricos. Representar los valores faltantes como `null`, incluidos los posibles `NaN` del origen. La salida de eventos no debe añadir columnas auxiliares. Si se necesitan indicadores como `play_id`, `is_opponent_intervention` o la elegibilidad, guardarlos en el manifiesto o en datos auxiliares separados. La equivalencia exigida es de nombres, orden y valores de columnas bajo esa normalización de faltantes; los tipos de pandas inferidos al releer JSON pueden diferir.
+- Crear una carpeta por competición, temporada y partido. Usar los identificadores de las rutas y del archivo como claves estables; los nombres de equipos son información opcional del manifiesto. La estructura mínima será:
+
+  ```text
+  <directorio_de_salida>/
+    competicion_73/temporada_351/partido_4063635/
+      jugada_0001.json
+      jugada_0002.json
+      ...
+      manifiesto.json
+  ```
+
+- Numerar `jugada_0001`, `jugada_0002`, etc. solo entre las jugadas elegibles, por el primer evento de cada una en orden de periodo e `index`, sin reiniciar por periodo. Un cambio de periodo separa jugadas; una jugada A → intervención rival → A puede contener varias posesiones base del mismo periodo.
+- El `manifiesto.json` de cada partido debe relacionar cada `play_id` guardado con su archivo, periodo, protagonista, primer y último `id` e `index`, posesiones de origen, identificadores de eventos de las intervenciones rivales absorbidas y número de pases completados. Construir `play_id` de manera estable y única en el corpus a partir de competición, temporada, partido y número de jugada guardada. Registrar también las columnas originales en orden, el nombre de temporada si está disponible, número de eventos de entrada, eventos exportados, secuencias candidatas descartadas por no alcanzar tres pases, eventos no exportados con su `id` y motivo, y parámetros usados. No sustituye los archivos individuales.
+- Definir en una celda de configuración la ruta de entrada, una ruta de salida distinta, los límites de continuidad y la política de reejecución. Ante una carpeta de partido ya existente, fallar antes de escribir, salvo que el usuario active explícitamente el reemplazo de los resultados generados para ese partido. Una reejecución con los mismos datos y parámetros debe producir la misma numeración y pertenencia de eventos.
+- Al terminar, mostrar partidos procesados, jugadas elegibles guardadas, secuencias candidatas descartadas por tener menos de tres pases, eventos no exportados, errores por partido y ruta de salida. Los errores de lectura o integridad deben identificar el archivo afectado, quedar en el resumen y hacer que la ejecución se declare incompleta; los resultados de un partido fallido no deben presentarse como correctos.
 
 ### Complemento 360 posterior
 
@@ -111,9 +138,9 @@ Desarrollar posteriormente un complemento con datos 360 para describir o subdivi
 
 ## Testing Decisions
 
-Propuesta de punto de prueba principal, pendiente de revisión: una única interfaz analítica de alto nivel que reciba eventos locales, parámetros y datos 360 opcionales, y devuelva jugadas, trazabilidad, asignaciones y diagnóstico de cobertura. Probar su comportamiento observable con conjuntos pequeños de eventos; comprobar la clasificación sobre un conjunto representativo de partidos. Evitar pruebas ligadas a funciones privadas, orden interno de cálculos o números arbitrarios de etiquetas.
+Propuesta de puntos de prueba, pendiente de revisión: comprobar por un lado el flujo de segmentación y exportación del notebook a partir de un partido local o un conjunto pequeño de eventos, y por otro la clasificación sobre un conjunto representativo de partidos. Una interfaz analítica posterior puede recibir eventos locales, parámetros y datos 360 opcionales y devolver jugadas, trazabilidad, asignaciones y diagnóstico de cobertura. Evitar pruebas ligadas a funciones privadas, orden interno de cálculos o números arbitrarios de etiquetas.
 
-La propuesta cubre segmentación, representación y asignación mediante ese mismo flujo. El antecedente disponible es el notebook y la auditoría de datos; no se identificó infraestructura previa de pruebas automatizadas que deba imitarse.
+La propuesta cubre segmentación, persistencia, representación y asignación mediante sus salidas observables. El antecedente disponible es el notebook y la auditoría de datos; no se identificó infraestructura previa de pruebas automatizadas que deba imitarse.
 
 Casos de aceptación a verificar:
 
@@ -124,20 +151,26 @@ Casos de aceptación a verificar:
 5. Salidas, detenciones y cambios de periodo impiden la unión incluso si A recupera dentro de los límites.
 6. Un tiro propio con rebote propio mantiene la continuidad; una falta con ventaja no introduce un corte artificial.
 7. Dos pases propios antes de una intervención tolerada y uno después producen tres pases para la jugada unida. Los pases rivales absorbidos no contribuyen.
-8. Las secuencias de menos de tres pases completados se excluyen; las de tres o más se conservan. Contar completados, no intentos ni recepciones.
+8. Las secuencias de menos de tres pases completados no producen archivo de jugada ni entran a la clasificación; las de tres o más se guardan y se clasifican. Contar completados, no intentos ni recepciones.
 9. Identificadores de posesión repetidos entre partidos o periodos no mezclan secuencias.
 10. Las jugadas y sus eventos permanecen auditables; las intervenciones absorbidas no aparecen como jugadas independientes duplicadas.
-11. Reflejar una jugada de izquierda a derecha conserva su representación equivalente y su asignación con el mismo modelo; modificar ritmo o altura conserva una diferencia medible en la representación.
-12. Dos secuencias con iguales totales pero distinto orden relevante mantienen información que permita distinguir su desarrollo. No exigir que toda diferencia pequeña fuerce un grupo distinto.
-13. Cada jugada elegible recibe una asignación principal, incluidas las de partidos sin 360. Quitar los datos 360 no modifica la segmentación ni las características principales basadas en eventos.
-14. La incorporación de múltiples jugadores 360 por evento no altera el número de eventos o pases de la jugada.
-15. Un frame vacío o un evento sin frame impide declarar cobertura espacial completa, sin eliminar la jugada del conjunto principal.
-16. Mantener parámetros y semilla, cuando corresponda, permite reproducir asignaciones. Comparar agrupaciones sin depender del valor numérico arbitrario de las etiquetas.
-17. Revisar muestras representativas, casos de peor encaje y estabilidad entre muestras de partidos para detectar grupos excesivamente amplios o fragmentados. La valoración táctica requiere revisión de ejemplos, además de métricas numéricas.
+11. Cada jugada elegible se escribe en un archivo independiente dentro de su carpeta de competición, temporada y partido; el manifiesto permite localizarla. Ninguna secuencia candidata que no cumpla el mínimo genera un archivo de jugada.
+12. Al leer cualquier archivo de jugada, las columnas coinciden con las de `df_eventos` en nombres y orden; las filas y valores pertenecen solo a esa jugada y conservan la cronología y los datos anidados. Los faltantes se recuperan como faltantes y el JSON es válido.
+13. Dos partidos con los mismos equipos en temporadas distintas producen carpetas distintas; un cambio de periodo impide unir jugadas, mientras que una unión permitida A → B → A conserva las distintas posesiones de origen en un único archivo.
+14. Los identificadores de eventos exportados aparecen una sola vez entre los archivos de jugadas del partido. Los eventos de candidatas descartadas, los administrativos y los no asignados se contabilizan por separado con motivo; su suma con los eventos exportados concilia con el archivo de entrada.
+15. Una segunda ejecución falla antes de sobrescribir una carpeta existente salvo reemplazo explícito; con el mismo origen y parámetros, la numeración y pertenencia de eventos son estables.
+16. El resumen del notebook concilia partidos leídos, jugadas elegibles guardadas, candidatas descartadas por pases, eventos no exportados y errores. Un error hace que la ejecución se declare incompleta e identifica el partido afectado.
+17. Reflejar una jugada de izquierda a derecha conserva su representación equivalente y su asignación con el mismo modelo; modificar ritmo o altura conserva una diferencia medible en la representación.
+18. Dos secuencias con iguales totales pero distinto orden relevante mantienen información que permita distinguir su desarrollo. No exigir que toda diferencia pequeña fuerce un grupo distinto.
+19. Cada jugada elegible recibe una asignación principal, incluidas las de partidos sin 360. Quitar los datos 360 no modifica la segmentación ni las características principales basadas en eventos.
+20. La incorporación de múltiples jugadores 360 por evento no altera el número de eventos o pases de la jugada.
+21. Un frame vacío o un evento sin frame impide declarar cobertura espacial completa, sin eliminar la jugada del conjunto principal.
+22. Mantener parámetros y semilla, cuando corresponda, permite reproducir asignaciones. Comparar agrupaciones sin depender del valor numérico arbitrario de las etiquetas.
+23. Revisar muestras representativas, casos de peor encaje y estabilidad entre muestras de partidos para detectar grupos excesivamente amplios o fragmentados. La valoración táctica requiere revisión de ejemplos, además de métricas numéricas.
 
 ## Out of Scope
 
-- Clasificar secuencias de menos de tres pases completados como jugadas elegibles en esta versión.
+- Guardar o clasificar secuencias de menos de tres pases completados del protagonista como jugadas elegibles en esta versión.
 - Condicionar la clasificación principal a la disponibilidad de 360.
 - Fijar de antemano una taxonomía táctica o un número definitivo de clusters sin evaluar las jugadas.
 - Tratar los grupos como etiquetas supervisadas previamente conocidas o usar KNN por sí solo como método de clustering.

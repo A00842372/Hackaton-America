@@ -3,3 +3,5 @@
 .ipynb_checkpoints/
 __pycache__/
 datos_statsbomb/
+datos_preparados/
+.pytest_cache/
