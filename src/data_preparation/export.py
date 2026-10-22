@@ -46,6 +46,53 @@ def _sanitizar_para_json(val: Any) -> Any:
     return val
 
 
+def construir_detalle_jugada(
+    eventos: pd.DataFrame,
+    protagonista: str,
+    play_id: str,
+    archivo: str,
+    fase: FaseJugada | None = None,
+    play_id_origen: str | None = None,
+) -> Dict[str, Any]:
+    """Construye la misma trazabilidad para exportación nueva y actualización."""
+    posesiones_origen = []
+    if "possession" in eventos.columns:
+        posesiones_origen = sorted({int(p) for p in eventos["possession"].dropna()})
+    intervenciones_rivales = []
+    for _, row in eventos.iterrows():
+        poseedor = row.get("possession_team")
+        if isinstance(poseedor, dict):
+            poseedor = poseedor.get("name")
+        if isinstance(poseedor, str) and poseedor != protagonista:
+            intervenciones_rivales.append(str(row.get("id")))
+
+    detalle = {
+        "play_id": play_id,
+        "archivo": archivo,
+        "period": int(eventos.iloc[0].get("period", 1)),
+        "equipo_protagonista": protagonista,
+        "primer_evento_id": str(eventos.iloc[0].get("id")),
+        "ultimo_evento_id": str(eventos.iloc[-1].get("id")),
+        "primer_index": int(eventos.iloc[0].get("index", 0)),
+        "ultimo_index": int(eventos.iloc[-1].get("index", 0)),
+        "posesiones_origen": posesiones_origen,
+        "intervenciones_rivales_absorbidas": intervenciones_rivales,
+        "pases_completados": contar_pases_completados(eventos, protagonista),
+        "total_eventos": len(eventos),
+    }
+    if fase is not None:
+        detalle.update({
+            "play_id_origen": play_id_origen,
+            "ordinal_tramo": fase.ordinal,
+            "categoria_clasificacion": fase.categoria,
+            "eventos_ids": [str(valor) for valor in eventos["id"]],
+            "motivo_corte": fase.motivo,
+            "corte_antes": fase.corte_antes,
+            "corte_despues": fase.corte_despues,
+        })
+    return detalle
+
+
 def exportar_jugadas_partido(
     df_eventos: pd.DataFrame,
     ruta_salida: Union[str, Path],
@@ -93,7 +140,7 @@ def exportar_jugadas_partido(
     total_cortes_clasificacion = 0
 
     for secuencia in secuencias_candidatas:
-        es_eleg, pases = es_jugada_elegible(secuencia, min_pases=min_pases)
+        es_eleg, _ = es_jugada_elegible(secuencia, min_pases=min_pases)
 
         if es_eleg:
             play_num += 1
@@ -126,42 +173,11 @@ def exportar_jugadas_partido(
 
                 total_eventos_exportados += len(eventos)
                 ids_exportados.extend(str(id_evento) for id_evento in eventos["id"])
-                posesiones_origen = []
-                if "possession" in eventos.columns:
-                    posesiones_origen = sorted({int(p) for p in eventos["possession"].dropna()})
-                intervenciones_rivales = []
-                for _, row in eventos.iterrows():
-                    poseedor = row.get("possession_team")
-                    if isinstance(poseedor, dict):
-                        poseedor = poseedor.get("name")
-                    if isinstance(poseedor, str) and poseedor != protagonista:
-                        intervenciones_rivales.append(str(row.get("id")))
-
-                detalle = {
-                    "play_id": play_id,
-                    "archivo": archivo_nombre,
-                    "period": int(eventos.iloc[0].get("period", 1)),
-                    "equipo_protagonista": protagonista,
-                    "primer_evento_id": str(eventos.iloc[0].get("id")),
-                    "ultimo_evento_id": str(eventos.iloc[-1].get("id")),
-                    "primer_index": int(eventos.iloc[0].get("index", 0)),
-                    "ultimo_index": int(eventos.iloc[-1].get("index", 0)),
-                    "posesiones_origen": posesiones_origen,
-                    "intervenciones_rivales_absorbidas": intervenciones_rivales,
-                    "pases_completados": contar_pases_completados(eventos, protagonista),
-                    "total_eventos": len(eventos),
-                }
-                if dividir_fases_clasificables:
-                    detalle.update({
-                        "play_id_origen": play_id_origen,
-                        "ordinal_tramo": fase.ordinal,
-                        "categoria_clasificacion": fase.categoria,
-                        "eventos_ids": [str(valor) for valor in eventos["id"]],
-                        "motivo_corte": fase.motivo,
-                        "corte_antes": fase.corte_antes,
-                        "corte_despues": fase.corte_despues,
-                    })
-                jugadas_manifiesto.append(detalle)
+                jugadas_manifiesto.append(construir_detalle_jugada(
+                    eventos, protagonista, play_id, archivo_nombre,
+                    fase if dividir_fases_clasificables else None,
+                    play_id_origen if dividir_fases_clasificables else None,
+                ))
         else:
             total_candidatas_descartadas += 1
             for _, row in secuencia.iterrows():

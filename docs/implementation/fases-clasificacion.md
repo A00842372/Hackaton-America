@@ -32,5 +32,21 @@ la opción, política para patrones desconocidos, auditoría de esos patrones y
 totales de jugadas de origen divididas y cortes. Los archivos de eventos
 mantienen exactamente sus columnas, orden y valores originales.
 
-La aplicación a los partidos **ya preparados** y la actualización de sus
-manifiestos y resumen en la ubicación actual corresponden al issue #13.
+## Corpus ya preparado (#13)
+
+Para actualizar las jugadas existentes en su ubicación actual, sin volver a
+leer los eventos originales:
+
+```bash
+python -m src.data_preparation.prepared_corpus datos_preparados_corpus --trabajadores 6
+```
+
+El proceso valida cada partido antes de publicar una carpeta completa. Los
+archivos de jugadas que no se dividen conservan nombre, ID y contenido; los
+que sí se dividen se sustituyen por archivos con sufijos `_f01`, `_f02`, etc.
+El manifiesto incorpora la categoría de todas las jugadas vigentes y los
+totales de cortes. `resumen_corpus.json` registra el resultado en
+`actualizacion_fases`, incluidos partidos revisados, actualizados, sin cambios,
+fallidos y errores. Mientras se ejecuta o si hay algún error, el estado global
+es `incompleto`. Ejecutar el comando de nuevo valida las carpetas ya
+actualizadas sin crear cortes ni alterar sus archivos.
