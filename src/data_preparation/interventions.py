@@ -107,6 +107,11 @@ def _acciones_relevantes(tramo: pd.DataFrame, equipo: str, limite: int) -> int:
     return conteo
 
 
+def contar_acciones_relevantes(tramo: pd.DataFrame, equipo: str) -> int:
+    """Cuenta las acciones de juego del equipo sin duplicar registros vinculados."""
+    return _acciones_relevantes(tramo, equipo, len(tramo))
+
+
 def _dentro_de_limites(
     anterior: pd.DataFrame,
     rival: pd.DataFrame,

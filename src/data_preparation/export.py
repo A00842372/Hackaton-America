@@ -7,9 +7,14 @@ import numpy as np
 import pandas as pd
 
 from src.data_preparation.plays import (
+    contar_pases_completados,
     es_jugada_elegible,
     extraer_secuencias_candidatas,
     obtener_equipo_protagonista,
+)
+from src.data_preparation.phases import (
+    FaseJugada, MIN_PASES_FASE, POLITICA_PATRON_DESCONOCIDO,
+    separar_fases_clasificables,
 )
 
 
@@ -49,6 +54,7 @@ def exportar_jugadas_partido(
     min_pases: int = 3,
     max_segundos_intervencion: float = 3,
     max_acciones_intervencion: int = 3,
+    dividir_fases_clasificables: bool = False,
 ) -> Dict[str, Any]:
     """Exporta las jugadas elegibles de un partido y genera el manifiesto de auditoría.
     
@@ -82,62 +88,80 @@ def exportar_jugadas_partido(
     total_candidatas_descartadas = 0
     play_num = 0
     ids_exportados: List[str] = []
+    patrones_desconocidos: List[Dict[str, Any]] = []
+    total_jugadas_origen_divididas = 0
+    total_cortes_clasificacion = 0
 
     for secuencia in secuencias_candidatas:
         es_eleg, pases = es_jugada_elegible(secuencia, min_pases=min_pases)
 
         if es_eleg:
             play_num += 1
-            archivo_nombre = f"jugada_{play_num:04d}.json"
-            ruta_archivo = dir_partido / archivo_nombre
-            play_id = f"c{competicion_id}_t{temporada_id}_m{partido_id}_p{play_num:04d}"
-
+            archivo_base = f"jugada_{play_num:04d}"
+            play_id_origen = f"c{competicion_id}_t{temporada_id}_m{partido_id}_p{play_num:04d}"
             protagonista = obtener_equipo_protagonista(secuencia)
+            if dividir_fases_clasificables:
+                resultado_fases = separar_fases_clasificables(secuencia, protagonista)
+                fases = resultado_fases.fases
+                patrones_desconocidos.extend(resultado_fases.patrones_desconocidos)
+                if len(fases) > 1:
+                    total_jugadas_origen_divididas += 1
+                    total_cortes_clasificacion += len(fases) - 1
+            else:
+                fases = [FaseJugada(secuencia, "", 1, "")]
 
-            filas_serializadas = []
-            for _, row in secuencia[columnas_originales].iterrows():
-                fila_dict = {col: _sanitizar_para_json(row[col]) for col in columnas_originales}
-                filas_serializadas.append([fila_dict[col] for col in columnas_originales])
+            for fase in fases:
+                eventos = fase.eventos
+                dividida = len(fases) > 1
+                sufijo = f"_f{fase.ordinal:02d}" if dividida else ""
+                archivo_nombre = f"{archivo_base}{sufijo}.json"
+                play_id = f"{play_id_origen}{sufijo}"
+                filas_serializadas = [
+                    [_sanitizar_para_json(row[col]) for col in columnas_originales]
+                    for _, row in eventos[columnas_originales].iterrows()
+                ]
+                with open(dir_partido / archivo_nombre, "w", encoding="utf-8") as f:
+                    json.dump({"columns": columnas_originales, "data": filas_serializadas},
+                              f, ensure_ascii=False, indent=2)
 
-            contenido_jugada = {
-                "columns": columnas_originales,
-                "data": filas_serializadas,
-            }
+                total_eventos_exportados += len(eventos)
+                ids_exportados.extend(str(id_evento) for id_evento in eventos["id"])
+                posesiones_origen = []
+                if "possession" in eventos.columns:
+                    posesiones_origen = sorted({int(p) for p in eventos["possession"].dropna()})
+                intervenciones_rivales = []
+                for _, row in eventos.iterrows():
+                    poseedor = row.get("possession_team")
+                    if isinstance(poseedor, dict):
+                        poseedor = poseedor.get("name")
+                    if isinstance(poseedor, str) and poseedor != protagonista:
+                        intervenciones_rivales.append(str(row.get("id")))
 
-            with open(ruta_archivo, "w", encoding="utf-8") as f:
-                json.dump(contenido_jugada, f, ensure_ascii=False, indent=2)
-
-            total_eventos_exportados += len(secuencia)
-            ids_exportados.extend(str(id_evento) for id_evento in secuencia["id"])
-
-            posesiones_origen = []
-            if "possession" in secuencia.columns:
-                posesiones_origen = sorted(
-                    list({int(p) for p in secuencia["possession"].dropna()})
-                )
-
-            intervenciones_rivales = []
-            for _, row in secuencia.iterrows():
-                poseedor = row.get("possession_team")
-                if isinstance(poseedor, dict):
-                    poseedor = poseedor.get("name")
-                if isinstance(poseedor, str) and poseedor != protagonista:
-                    intervenciones_rivales.append(str(row.get("id")))
-
-            jugadas_manifiesto.append({
-                "play_id": play_id,
-                "archivo": archivo_nombre,
-                "period": int(secuencia.iloc[0].get("period", 1)),
-                "equipo_protagonista": protagonista,
-                "primer_evento_id": str(secuencia.iloc[0].get("id")),
-                "ultimo_evento_id": str(secuencia.iloc[-1].get("id")),
-                "primer_index": int(secuencia.iloc[0].get("index", 0)),
-                "ultimo_index": int(secuencia.iloc[-1].get("index", 0)),
-                "posesiones_origen": posesiones_origen,
-                "intervenciones_rivales_absorbidas": intervenciones_rivales,
-                "pases_completados": pases,
-                "total_eventos": len(secuencia),
-            })
+                detalle = {
+                    "play_id": play_id,
+                    "archivo": archivo_nombre,
+                    "period": int(eventos.iloc[0].get("period", 1)),
+                    "equipo_protagonista": protagonista,
+                    "primer_evento_id": str(eventos.iloc[0].get("id")),
+                    "ultimo_evento_id": str(eventos.iloc[-1].get("id")),
+                    "primer_index": int(eventos.iloc[0].get("index", 0)),
+                    "ultimo_index": int(eventos.iloc[-1].get("index", 0)),
+                    "posesiones_origen": posesiones_origen,
+                    "intervenciones_rivales_absorbidas": intervenciones_rivales,
+                    "pases_completados": contar_pases_completados(eventos, protagonista),
+                    "total_eventos": len(eventos),
+                }
+                if dividir_fases_clasificables:
+                    detalle.update({
+                        "play_id_origen": play_id_origen,
+                        "ordinal_tramo": fase.ordinal,
+                        "categoria_clasificacion": fase.categoria,
+                        "eventos_ids": [str(valor) for valor in eventos["id"]],
+                        "motivo_corte": fase.motivo,
+                        "corte_antes": fase.corte_antes,
+                        "corte_despues": fase.corte_despues,
+                    })
+                jugadas_manifiesto.append(detalle)
         else:
             total_candidatas_descartadas += 1
             for _, row in secuencia.iterrows():
@@ -160,14 +184,20 @@ def exportar_jugadas_partido(
         "total_eventos_exportados": total_eventos_exportados,
         "total_candidatas_descartadas": total_candidatas_descartadas,
         "total_jugadas_elegibles": len(jugadas_manifiesto),
+        "total_jugadas_origen_divididas": total_jugadas_origen_divididas,
+        "total_cortes_clasificacion": total_cortes_clasificacion,
         "columnas": columnas_originales,
         "parametros": {
             "min_pases": min_pases,
             "max_segundos_intervencion": max_segundos_intervencion,
             "max_acciones_intervencion": max_acciones_intervencion,
+            "dividir_fases_clasificables": dividir_fases_clasificables,
+            "min_pases_por_fase": MIN_PASES_FASE,
+            "politica_patron_desconocido": POLITICA_PATRON_DESCONOCIDO,
         },
         "jugadas": jugadas_manifiesto,
         "eventos_no_exportados": eventos_no_exportados,
+        "patrones_desconocidos": patrones_desconocidos,
     }
 
     with open(dir_partido / "manifiesto.json", "w", encoding="utf-8") as f:

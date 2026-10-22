@@ -23,6 +23,7 @@ class TareaPartido:
     min_pases: int
     max_segundos_intervencion: float
     max_acciones_intervencion: int
+    dividir_fases_clasificables: bool
 
 
 def descubrir_archivos_eventos(ruta_entrada: Union[str, Path]) -> list[Path]:
@@ -96,6 +97,7 @@ def _procesar_partido(tarea: TareaPartido) -> dict[str, Any]:
             min_pases=tarea.min_pases,
             max_segundos_intervencion=tarea.max_segundos_intervencion,
             max_acciones_intervencion=tarea.max_acciones_intervencion,
+            dividir_fases_clasificables=tarea.dividir_fases_clasificables,
         )
         if (
             manifiesto["total_eventos_exportados"]
@@ -116,6 +118,8 @@ def _procesar_partido(tarea: TareaPartido) -> dict[str, Any]:
         "total_eventos_no_exportados": len(manifiesto["eventos_no_exportados"]),
         "total_candidatas_descartadas": manifiesto["total_candidatas_descartadas"],
         "total_jugadas_elegibles": manifiesto["total_jugadas_elegibles"],
+        "total_jugadas_origen_divididas": manifiesto["total_jugadas_origen_divididas"],
+        "total_cortes_clasificacion": manifiesto["total_cortes_clasificacion"],
     }
 
 
@@ -127,6 +131,7 @@ def procesar_corpus(
     min_pases: int = 3,
     max_segundos_intervencion: float = 3,
     max_acciones_intervencion: int = 3,
+    dividir_fases_clasificables: bool = False,
     trabajadores: int = 1,
 ) -> dict[str, Any]:
     """Procesa independientemente cada partido y deja un resumen del lote."""
@@ -151,10 +156,13 @@ def procesar_corpus(
         "total_eventos_no_exportados": 0,
         "total_candidatas_descartadas": 0,
         "total_jugadas_elegibles": 0,
+        "total_jugadas_origen_divididas": 0,
+        "total_cortes_clasificacion": 0,
         "parametros": {
             "min_pases": min_pases,
             "max_segundos_intervencion": max_segundos_intervencion,
             "max_acciones_intervencion": max_acciones_intervencion,
+            "dividir_fases_clasificables": dividir_fases_clasificables,
             "sobrescribir": sobrescribir,
             "trabajadores": trabajadores,
         },
@@ -177,6 +185,7 @@ def procesar_corpus(
             tareas.append(TareaPartido(
                 ruta, salida, metadatos, sobrescribir, min_pases,
                 max_segundos_intervencion, max_acciones_intervencion,
+                dividir_fases_clasificables,
             ))
         except Exception as exc:
             resumen["errores"].append({
@@ -202,6 +211,7 @@ def procesar_corpus(
             "total_eventos_entrada", "total_eventos_exportados",
             "total_eventos_no_exportados", "total_candidatas_descartadas",
             "total_jugadas_elegibles",
+            "total_jugadas_origen_divididas", "total_cortes_clasificacion",
         ):
             resumen[campo] += resultado[campo]
 
