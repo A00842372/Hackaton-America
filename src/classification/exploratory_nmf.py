@@ -3,7 +3,6 @@
 import argparse
 import json
 import math
-from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -13,67 +12,13 @@ from sklearn.decomposition import NMF
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.feature_extraction.text import TfidfTransformer
 
+from src.classification.features import (
+    ConfiguracionEspacial, DISTANCIA_CORTA, DISTANCIA_MEDIA, UMBRAL_AVANCE_X,
+    representar_jugada, verificar_orientacion,
+)
+
 
 CATEGORIAS = ("balon_parado", "juego_abierto")
-UMBRAL_AVANCE_X = 5.0
-DISTANCIA_CORTA = 10.0
-DISTANCIA_MEDIA = 30.0
-AUXILIARES = {
-    "Ball Receipt*", "Camera On", "Camera Off", "Tactical Shift",
-    "Starting XI", "Half Start", "Half End",
-}
-AUXILIARES_VINCULADOS = {"Dribbled Past", "Foul Won"}
-
-
-def _nombre(valor: Any) -> str | None:
-    if isinstance(valor, dict):
-        return valor.get("name")
-    return valor if isinstance(valor, str) else None
-
-
-def _punto(valor: Any) -> tuple[float, float] | None:
-    if not isinstance(valor, list) or len(valor) < 2:
-        return None
-    x, y = valor[:2]
-    if not all(isinstance(n, (int, float)) and math.isfinite(n) for n in (x, y)):
-        return None
-    return float(x), float(y)
-
-
-def _accion(evento: dict[str, Any], protagonista: str) -> str | None:
-    tipo = _nombre(evento.get("type"))
-    if not tipo or tipo in AUXILIARES or (
-        tipo in AUXILIARES_VINCULADOS and evento.get("related_events")
-    ):
-        return None
-    equipo = _nombre(evento.get("team"))
-    actor = "propio" if equipo == protagonista else "rival" if equipo else "desconocido"
-    token = f"{actor}:{tipo.replace(' ', '_')}"
-    origen = _punto(evento.get("location"))
-    detalle = evento.get(tipo.lower().replace(" ", "_"))
-    destino = _punto(detalle.get("end_location")) if isinstance(detalle, dict) else None
-    if origen is not None and destino is not None:
-        avance = destino[0] - origen[0]
-        distancia = math.dist(origen, destino)
-        direccion = (
-            "avance" if avance > UMBRAL_AVANCE_X else
-            "retroceso" if avance < -UMBRAL_AVANCE_X else "lateral"
-        )
-        tramo = (
-            "corto" if distancia < DISTANCIA_CORTA else
-            "medio" if distancia < DISTANCIA_MEDIA else "largo"
-        )
-        token += f":{direccion}:{tramo}"
-    return token
-
-
-def _ngramas(eventos: list[dict[str, Any]], protagonista: str) -> Counter[str]:
-    acciones = [accion for evento in eventos if (accion := _accion(evento, protagonista))]
-    return Counter(
-        f"n{largo}:" + " → ".join(acciones[inicio:inicio + largo])
-        for largo in (2, 3)
-        for inicio in range(len(acciones) - largo + 1)
-    )
 
 
 def _leer_jugadas(corpus: Path, manifiestos: list[Path]) -> list[dict[str, Any]]:
@@ -109,7 +54,8 @@ def _leer_jugadas(corpus: Path, manifiestos: list[Path]) -> list[dict[str, Any]]
                 "categoria": categoria,
                 "manifiesto": str(ruta.relative_to(corpus)),
                 "archivo": archivo,
-                "ngramas": _ngramas(eventos, detalle["equipo_protagonista"]),
+                "eventos": eventos,
+                "protagonista": detalle["equipo_protagonista"],
             })
     return jugadas
 
@@ -130,6 +76,7 @@ def clasificar_muestra(
     partidos_reservados: Iterable[int] | None = None,
     n_componentes: int = 4,
     semilla: int = 42,
+    configuracion_espacial: ConfiguracionEspacial | None = None,
 ) -> dict[str, Any]:
     """Ajusta dos NMF independientes y puntúa entrenamiento y partidos reservados.
 
@@ -147,6 +94,12 @@ def clasificar_muestra(
     if len(manifiestos) < 2:
         raise ValueError("Se requieren al menos dos partidos preparados")
     jugadas = _leer_jugadas(corpus, manifiestos)
+    verificacion = verificar_orientacion(jugadas) if configuracion_espacial else None
+    for jugada in jugadas:
+        jugada["ngramas"], metadatos = representar_jugada(
+            jugada.pop("eventos"), jugada.pop("protagonista"), configuracion_espacial,
+        )
+        jugada.update(metadatos)
     partidos = [int(ruta.parent.name.removeprefix("partido_")) for ruta in manifiestos]
     if len(set(partidos)) != len(partidos):
         raise ValueError("La muestra contiene IDs de partido duplicados")
@@ -177,7 +130,14 @@ def clasificar_muestra(
             },
             "nmf_init": "nndsvda", "nmf_max_iter": 500,
             "escala_pesos": "W cruda sobre TF-IDF L2; no son probabilidades",
+            "representacion": "base" if configuracion_espacial is None else "espacial",
+            "cuadricula": None if configuracion_espacial is None else {
+                "zonas_x": configuracion_espacial.zonas_x,
+                "zonas_y": configuracion_espacial.zonas_y,
+            },
+            "peso_espacial": None if configuracion_espacial is None else configuracion_espacial.peso,
         },
+        "verificacion_orientacion": verificacion,
         "partidos_entrenamiento": entrenamiento,
         "partidos_evaluacion": sorted(reservados),
         "modelos": {},
@@ -233,6 +193,7 @@ def clasificar_muestra(
                 "cobertura_vocabulario": float(fraccion),
                 "estado_proyeccion": "sin_rasgos_conocidos" if sin_rasgos else "proyectada",
                 "manifiesto": fila["manifiesto"], "archivo": fila["archivo"],
+                "banda_original": fila["banda_original"], "reflejada": fila["reflejada"],
             })
     resultado["jugadas"].sort(key=lambda fila: fila["play_id"])
     salida.mkdir(parents=True)
@@ -243,6 +204,70 @@ def clasificar_muestra(
     return resultado
 
 
+def comparar_representaciones(
+    ruta_corpus: str | Path,
+    ruta_salida: str | Path,
+    *,
+    max_partidos: int | None = 12,
+    partidos_reservados: Iterable[int] | None = None,
+    n_componentes: int = 4,
+    semilla: int = 42,
+    zonas_x: int = 6,
+    zonas_y: int = 4,
+    peso_espacial: float = 1.0,
+) -> dict[str, Any]:
+    """Ejecuta dos variantes con la misma partición y resume su ajuste exploratorio."""
+    salida = Path(ruta_salida)
+    if salida.exists():
+        raise FileExistsError(f"La salida ya existe: {salida}")
+    config = ConfiguracionEspacial(zonas_x, zonas_y, peso_espacial)
+    # La corrida espacial valida la orientación antes de producir rasgos.
+    espacial = clasificar_muestra(
+        ruta_corpus, salida / "espacial", max_partidos=max_partidos,
+        partidos_reservados=partidos_reservados, n_componentes=n_componentes,
+        semilla=semilla, configuracion_espacial=config,
+    )
+    base = clasificar_muestra(
+        ruta_corpus, salida / "base", max_partidos=max_partidos,
+        partidos_reservados=espacial["partidos_evaluacion"],
+        n_componentes=n_componentes, semilla=semilla,
+    )
+    if [(j["play_id"], j["particion"]) for j in base["jugadas"]] != [
+        (j["play_id"], j["particion"]) for j in espacial["jugadas"]
+    ]:
+        raise ValueError("Las variantes no concilian en cobertura o partición")
+    comparacion: dict[str, Any] = {
+        "estado": "exploratorio",
+        "jugadas": len(espacial["jugadas"]),
+        "partidos_entrenamiento": espacial["partidos_entrenamiento"],
+        "partidos_evaluacion": espacial["partidos_evaluacion"],
+        "variantes": {},
+    }
+    for nombre, resultado in (("base", base), ("espacial", espacial)):
+        comparacion["variantes"][nombre] = {
+            "ruta_resultados": f"{nombre}/resultados.json",
+            "por_categoria": {categoria: _resumir_categoria(resultado, categoria) for categoria in CATEGORIAS},
+        }
+    with (salida / "comparacion.json").open("w", encoding="utf-8") as archivo:
+        json.dump(comparacion, archivo, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
+    return comparacion
+
+
+def _resumir_categoria(resultado: dict[str, Any], categoria: str) -> dict[str, Any]:
+    filas = [fila for fila in resultado["jugadas"] if fila["categoria"] == categoria]
+    evaluacion = [fila for fila in filas if fila["particion"] == "evaluacion"]
+    errores = [fila["error_reconstruccion"] for fila in evaluacion
+               if fila["error_reconstruccion"] is not None]
+    return {
+        "jugadas": len(filas),
+        "jugadas_evaluacion": len(evaluacion),
+        "error_medio_evaluacion": float(np.mean(errores)) if errores else None,
+        "cobertura_media_evaluacion": float(np.mean([
+            fila["cobertura_vocabulario"] for fila in evaluacion
+        ])) if evaluacion else None,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Piloto NMF exploratorio por categoría")
     parser.add_argument("ruta_corpus", type=Path)
@@ -251,16 +276,30 @@ def main() -> None:
     parser.add_argument("--componentes", type=int, default=4)
     parser.add_argument("--semilla", type=int, default=42)
     parser.add_argument("--reservar-partido", type=int, action="append", dest="reservados")
+    parser.add_argument("--comparar-espacio", action="store_true")
+    parser.add_argument("--zonas-x", type=int, default=6)
+    parser.add_argument("--zonas-y", type=int, default=4)
+    parser.add_argument("--peso-espacial", type=float, default=1.0)
     args = parser.parse_args()
-    resultado = clasificar_muestra(
-        args.ruta_corpus, args.ruta_salida,
-        max_partidos=args.max_partidos, partidos_reservados=args.reservados,
-        n_componentes=args.componentes, semilla=args.semilla,
-    )
+    if args.comparar_espacio:
+        resumen = comparar_representaciones(
+            args.ruta_corpus, args.ruta_salida,
+            max_partidos=args.max_partidos, partidos_reservados=args.reservados,
+            n_componentes=args.componentes, semilla=args.semilla,
+            zonas_x=args.zonas_x, zonas_y=args.zonas_y, peso_espacial=args.peso_espacial,
+        )
+        total_jugadas = resumen["jugadas"]
+    else:
+        resumen = clasificar_muestra(
+            args.ruta_corpus, args.ruta_salida,
+            max_partidos=args.max_partidos, partidos_reservados=args.reservados,
+            n_componentes=args.componentes, semilla=args.semilla,
+        )
+        total_jugadas = len(resumen["jugadas"])
     print(json.dumps({
-        "estado": resultado["estado"], "jugadas": len(resultado["jugadas"]),
-        "partidos_entrenamiento": len(resultado["partidos_entrenamiento"]),
-        "partidos_evaluacion": len(resultado["partidos_evaluacion"]),
+        "estado": resumen["estado"], "jugadas": total_jugadas,
+        "partidos_entrenamiento": len(resumen["partidos_entrenamiento"]),
+        "partidos_evaluacion": len(resumen["partidos_evaluacion"]),
         "ruta_salida": str(args.ruta_salida),
     }, ensure_ascii=False))
 

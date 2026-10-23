@@ -6,4 +6,5 @@ datos_statsbomb/
 datos_preparados/
 datos_preparados_corpus/
 datos_clasificacion_exploratoria/
+datos_clasificacion_espacial/
 .pytest_cache/
