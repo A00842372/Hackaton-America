@@ -3,6 +3,7 @@
 import math
 from collections import Counter
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from statistics import median
 from typing import Any, Iterable, Literal
 
@@ -229,12 +230,61 @@ def _ngramas(tokens: list[str], prefijo: str = "") -> Counter[str]:
     )
 
 
+def _ngramas_por_tercio(tokens: list[str], prefijo: str = "") -> Counter[str]:
+    """Etiqueta n-gramas contenidos en cada tercio de acciones de una jugada."""
+    rasgos: Counter[str] = Counter()
+    cantidad = len(tokens)
+    for indice, tercio in enumerate(("inicio", "medio", "final")):
+        tramo = [token for posicion, token in enumerate(tokens)
+                 if min(2, 3 * posicion // cantidad) == indice]
+        rasgos.update(_ngramas(tramo, f"{prefijo}posicion:{tercio}:"))
+    return rasgos
+
+
+def _segundos(marca: Any) -> Decimal | None:
+    if not isinstance(marca, str):
+        return None
+    try:
+        horas, minutos, segundos = (Decimal(parte) for parte in marca.split(":"))
+    except (ValueError, InvalidOperation):
+        return None
+    if not all(valor.is_finite() and valor >= 0 for valor in (horas, minutos, segundos)):
+        return None
+    if minutos >= 60 or segundos >= 60:
+        return None
+    return horas * 3600 + minutos * 60 + segundos
+
+
+def _ngramas_temporales(tokens: list[str], eventos: list[dict[str, Any]]) -> Counter[str]:
+    """Añade intervalos observados entre inicios; omite ventanas sin tiempo válido."""
+    marcas = [_segundos(evento.get("timestamp")) for evento in eventos]
+    intervalos: list[str | None] = []
+    for anterior, posterior in zip(marcas, marcas[1:]):
+        if anterior is None or posterior is None or posterior <= anterior:
+            intervalos.append(None)
+            continue
+        delta = posterior - anterior
+        intervalos.append("rapido" if delta <= 1 else "medio" if delta <= 3 else "lento")
+    rasgos: Counter[str] = Counter()
+    for largo in (2, 3):
+        for inicio in range(len(tokens) - largo + 1):
+            ritmos = intervalos[inicio:inicio + largo - 1]
+            if None in ritmos:
+                continue
+            rasgos[
+                f"ritmo:n{largo}:" + " → ".join(tokens[inicio:inicio + largo])
+                + ":intervalos=" + ",".join(ritmo for ritmo in ritmos if ritmo is not None)
+            ] += 1
+    return rasgos
+
+
 def representar_jugada(
     eventos: list[dict[str, Any]], protagonista: str,
     config: ConfiguracionEspacial | None = None,
-    *, modo_rivales: ModoRivales = "con_rivales",
+    *, modo_rivales: ModoRivales = "con_rivales", posicion: bool = False,
+    ritmo: bool = False,
 ) -> tuple[Counter[str], dict[str, Any]]:
-    """Conserva los n-gramas base y añade los espaciales en un marco común."""
+    """Genera n-gramas locales y, opcionalmente, rasgos espaciales y posicionales."""
     if modo_rivales not in ("con_rivales", "sin_rivales"):
         raise ValueError(f"Modo de rivales desconocido: {modo_rivales}")
     acciones = _acciones(eventos, protagonista)
@@ -265,6 +315,12 @@ def representar_jugada(
         for evento, tipo, _, papel in seleccionadas
     ]
     rasgos = _ngramas(basicos)
+    if posicion:
+        rasgos.update(_ngramas_por_tercio(basicos))
+    if ritmo:
+        rasgos.update(_ngramas_temporales(
+            basicos, [evento for evento, _, _, _ in seleccionadas],
+        ))
     if config is not None:
         espaciales = [
             _token_espacial(evento, tipo, actor, papel, reflejar, config)
@@ -272,6 +328,9 @@ def representar_jugada(
         ]
         for ngrama, cantidad in _ngramas(espaciales, "espacio:").items():
             rasgos[ngrama] = cantidad * config.peso
+        if posicion:
+            for ngrama, cantidad in _ngramas_por_tercio(espaciales, "espacio:").items():
+                rasgos[ngrama] = cantidad * config.peso
     return rasgos, {"banda_original": banda, "reflejada": reflejar}
 
 

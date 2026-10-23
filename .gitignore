@@ -8,4 +8,8 @@ datos_preparados_corpus/
 datos_clasificacion_exploratoria/
 datos_clasificacion_espacial/
 datos_clasificacion_rivales/
+datos_clasificacion_posicional/
+datos_clasificacion_cronologia/
+datos_clasificacion_cronologia_diversa/
+datos_clasificacion_cronologia_semilla_43/
 .pytest_cache/

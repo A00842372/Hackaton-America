@@ -21,6 +21,18 @@ from src.classification.features import (
 CATEGORIAS = ("balon_parado", "juego_abierto")
 
 
+def _muestra_por_temporada(manifiestos: list[Path], limite: int) -> list[Path]:
+    temporadas: dict[tuple[str, str], list[Path]] = {}
+    for ruta in manifiestos:
+        temporadas.setdefault((ruta.parent.parent.parent.name, ruta.parent.parent.name), []).append(ruta)
+    muestra: list[Path] = []
+    while len(muestra) < limite and any(temporadas.values()):
+        for rutas in temporadas.values():
+            if rutas and len(muestra) < limite:
+                muestra.append(rutas.pop(0))
+    return sorted(muestra)
+
+
 def _leer_jugadas(corpus: Path, manifiestos: list[Path]) -> list[dict[str, Any]]:
     jugadas = []
     ids: set[str] = set()
@@ -78,6 +90,9 @@ def clasificar_muestra(
     semilla: int = 42,
     configuracion_espacial: ConfiguracionEspacial | None = None,
     modo_rivales: ModoRivales = "con_rivales",
+    posicion: bool = False,
+    ritmo: bool = False,
+    muestra_diversa: bool = False,
 ) -> dict[str, Any]:
     """Ajusta dos NMF independientes y puntúa entrenamiento y partidos reservados.
 
@@ -91,7 +106,8 @@ def clasificar_muestra(
         raise FileExistsError(f"La salida ya existe: {salida}")
     manifiestos = sorted(corpus.glob("competicion_*/temporada_*/partido_*/manifiesto.json"))
     if max_partidos is not None:
-        manifiestos = manifiestos[:max_partidos]
+        manifiestos = (_muestra_por_temporada(manifiestos, max_partidos) if muestra_diversa
+                      else manifiestos[:max_partidos])
     if len(manifiestos) < 2:
         raise ValueError("Se requieren al menos dos partidos preparados")
     jugadas = _leer_jugadas(corpus, manifiestos)
@@ -99,7 +115,7 @@ def clasificar_muestra(
     for jugada in jugadas:
         jugada["ngramas"], metadatos = representar_jugada(
             jugada.pop("eventos"), jugada.pop("protagonista"), configuracion_espacial,
-            modo_rivales=modo_rivales,
+            modo_rivales=modo_rivales, posicion=posicion, ritmo=ritmo,
         )
         jugada.update(metadatos)
     partidos = [int(ruta.parent.name.removeprefix("partido_")) for ruta in manifiestos]
@@ -117,15 +133,27 @@ def clasificar_muestra(
     if not entrenamiento:
         raise ValueError("La muestra debe conservar partidos de entrenamiento")
 
+    representacion = "_".join(
+        nombre for activo, nombre in (
+            (configuracion_espacial is not None, "espacial"),
+            (posicion, "posicional"), (ritmo, "temporal"),
+        ) if activo
+    ) or "base"
+
     resultado: dict[str, Any] = {
         "estado": "exploratorio",
         "ruta_corpus": str(corpus),
         "parametros": {
             "max_partidos": max_partidos, "n_componentes_solicitados": n_componentes,
+            "muestra_diversa": muestra_diversa,
             "semilla": semilla, "particion": "por_partido",
             "vectorizacion": "conteos_ngramas_2_3_tfidf_l2",
             "tokenizacion": "acciones_desplazamientos_lances_v2",
             "modo_rivales": modo_rivales,
+            "posicion": posicion,
+            "ritmo": ritmo,
+            "umbrales_ritmo_segundos": {"rapido_hasta": 1, "medio_hasta": 3},
+            "intervalo_ritmo": "diferencia_positiva_entre_inicios_observados",
             "umbrales_movimiento": {
                 "avance_x": UMBRAL_AVANCE_X,
                 "distancia_corta": DISTANCIA_CORTA,
@@ -133,7 +161,7 @@ def clasificar_muestra(
             },
             "nmf_init": "nndsvda", "nmf_max_iter": 500,
             "escala_pesos": "W cruda sobre TF-IDF L2; no son probabilidades",
-            "representacion": "base" if configuracion_espacial is None else "espacial",
+            "representacion": representacion,
             "cuadricula": None if configuracion_espacial is None else {
                 "zonas_x": configuracion_espacial.zonas_x,
                 "zonas_y": configuracion_espacial.zonas_y,
@@ -179,6 +207,11 @@ def clasificar_muestra(
             "archivo_modelo": archivo_modelo,
             "jugadas_entrenamiento": len(filas_train),
             "jugadas_evaluacion": len(filas) - len(filas_train),
+            "matriz_entrenamiento": {
+                "filas": int(matriz_train.shape[0]),
+                "columnas": int(matriz_train.shape[1]),
+                "elementos_no_nulos": int(matriz_train.nnz),
+            },
         }
         artefactos[archivo_modelo] = {
             "vectorizador": vectorizador, "tfidf": tfidf, "nmf": modelo,
@@ -235,22 +268,95 @@ def comparar_representaciones(
         partidos_reservados=espacial["partidos_evaluacion"],
         n_componentes=n_componentes, semilla=semilla,
     )
-    if [(j["play_id"], j["particion"]) for j in base["jugadas"]] != [
-        (j["play_id"], j["particion"]) for j in espacial["jugadas"]
-    ]:
-        raise ValueError("Las variantes no concilian en cobertura o partición")
+    return _guardar_comparacion(salida, (("base", base), ("espacial", espacial)))
+
+
+def comparar_posiciones(
+    ruta_corpus: str | Path,
+    ruta_salida: str | Path,
+    *,
+    max_partidos: int | None = 12,
+    partidos_reservados: Iterable[int] | None = None,
+    n_componentes: int = 4,
+    semilla: int = 42,
+    configuracion_espacial: ConfiguracionEspacial | None = None,
+) -> dict[str, Any]:
+    """Compara n-gramas locales con la variante que registra su tercio."""
+    salida = Path(ruta_salida)
+    if salida.exists():
+        raise FileExistsError(f"La salida ya existe: {salida}")
+    base = clasificar_muestra(
+        ruta_corpus, salida / "base", max_partidos=max_partidos,
+        partidos_reservados=partidos_reservados, n_componentes=n_componentes,
+        semilla=semilla, configuracion_espacial=configuracion_espacial,
+    )
+    posicional = clasificar_muestra(
+        ruta_corpus, salida / "posicional", max_partidos=max_partidos,
+        partidos_reservados=base["partidos_evaluacion"], n_componentes=n_componentes,
+        semilla=semilla, configuracion_espacial=configuracion_espacial,
+        posicion=True,
+    )
+    return _guardar_comparacion(salida, (("base", base), ("posicional", posicional)))
+
+
+def comparar_cronologia_y_ritmo(
+    ruta_corpus: str | Path,
+    ruta_salida: str | Path,
+    *,
+    max_partidos: int | None = 12,
+    partidos_reservados: Iterable[int] | None = None,
+    n_componentes: int = 4,
+    semilla: int = 42,
+    muestra_diversa: bool = True,
+) -> dict[str, Any]:
+    """Compara base, posición y ritmo en las mismas jugadas y particiones."""
+    salida = Path(ruta_salida)
+    if salida.exists():
+        raise FileExistsError(f"La salida ya existe: {salida}")
+    base = clasificar_muestra(
+        ruta_corpus, salida / "base", max_partidos=max_partidos,
+        partidos_reservados=partidos_reservados, n_componentes=n_componentes,
+        semilla=semilla, muestra_diversa=muestra_diversa,
+    )
+    posicional = clasificar_muestra(
+        ruta_corpus, salida / "posicional", max_partidos=max_partidos,
+        partidos_reservados=base["partidos_evaluacion"], n_componentes=n_componentes,
+        semilla=semilla, posicion=True, muestra_diversa=muestra_diversa,
+    )
+    temporal = clasificar_muestra(
+        ruta_corpus, salida / "temporal", max_partidos=max_partidos,
+        partidos_reservados=base["partidos_evaluacion"], n_componentes=n_componentes,
+        semilla=semilla, ritmo=True, muestra_diversa=muestra_diversa,
+    )
+    return _guardar_comparacion(salida, (
+        ("base", base), ("posicional", posicional), ("temporal", temporal),
+    ))
+
+
+def _guardar_comparacion(
+    salida: Path, variantes: tuple[tuple[str, dict[str, Any]], ...],
+) -> dict[str, Any]:
+    base = variantes[0][1]
+    referencia = [(j["play_id"], j["particion"]) for j in base["jugadas"]]
+    for _, variante in variantes[1:]:
+        if referencia != [(j["play_id"], j["particion"]) for j in variante["jugadas"]]:
+            raise ValueError("Las variantes no concilian en cobertura o partición")
     comparacion: dict[str, Any] = {
         "estado": "exploratorio",
-        "jugadas": len(espacial["jugadas"]),
-        "partidos_entrenamiento": espacial["partidos_entrenamiento"],
-        "partidos_evaluacion": espacial["partidos_evaluacion"],
-        "variantes": {},
+        "jugadas": len(base["jugadas"]),
+        "partidos_entrenamiento": base["partidos_entrenamiento"],
+        "partidos_evaluacion": base["partidos_evaluacion"],
+        "variantes": {
+            nombre: {
+                "ruta_resultados": f"{nombre}/resultados.json",
+                "por_categoria": {
+                    categoria: _resumir_categoria(resultado, categoria)
+                    for categoria in CATEGORIAS
+                },
+            }
+            for nombre, resultado in variantes
+        },
     }
-    for nombre, resultado in (("base", base), ("espacial", espacial)):
-        comparacion["variantes"][nombre] = {
-            "ruta_resultados": f"{nombre}/resultados.json",
-            "por_categoria": {categoria: _resumir_categoria(resultado, categoria) for categoria in CATEGORIAS},
-        }
     with (salida / "comparacion.json").open("w", encoding="utf-8") as archivo:
         json.dump(comparacion, archivo, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
     return comparacion
@@ -281,11 +387,14 @@ def main() -> None:
     parser.add_argument("--reservar-partido", type=int, action="append", dest="reservados")
     parser.add_argument("--comparar-espacio", action="store_true")
     parser.add_argument("--comparar-rivales", action="store_true")
+    parser.add_argument("--comparar-posicion", action="store_true")
+    parser.add_argument("--comparar-ritmo", action="store_true")
     parser.add_argument("--zonas-x", type=int, default=6)
     parser.add_argument("--zonas-y", type=int, default=4)
     parser.add_argument("--peso-espacial", type=float, default=1.0)
     args = parser.parse_args()
-    if args.comparar_espacio and args.comparar_rivales:
+    if sum((args.comparar_espacio, args.comparar_rivales,
+            args.comparar_posicion, args.comparar_ritmo)) > 1:
         parser.error("Elige una sola comparación")
     if args.comparar_espacio:
         resumen = comparar_representaciones(
@@ -305,6 +414,20 @@ def main() -> None:
             configuracion_espacial=ConfiguracionEspacial(
                 args.zonas_x, args.zonas_y, args.peso_espacial,
             ),
+        )
+        total_jugadas = resumen["jugadas"]
+    elif args.comparar_posicion:
+        resumen = comparar_posiciones(
+            args.ruta_corpus, args.ruta_salida,
+            max_partidos=args.max_partidos, partidos_reservados=args.reservados,
+            n_componentes=args.componentes, semilla=args.semilla,
+        )
+        total_jugadas = resumen["jugadas"]
+    elif args.comparar_ritmo:
+        resumen = comparar_cronologia_y_ritmo(
+            args.ruta_corpus, args.ruta_salida,
+            max_partidos=args.max_partidos, partidos_reservados=args.reservados,
+            n_componentes=args.componentes, semilla=args.semilla,
         )
         total_jugadas = resumen["jugadas"]
     else:
