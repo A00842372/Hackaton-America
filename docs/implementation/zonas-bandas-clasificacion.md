@@ -37,7 +37,10 @@ coordenada fuera del campo se marca `fuera_campo` y no genera un movimiento
 calculado. Los n-gramas espaciales de longitud 2 y 3 reciben el peso elegido
 antes de TF-IDF; los n-gramas base conservan su tokenización y peso 1 en ambas
 variantes. La rotación rival se aplica a los rasgos espaciales añadidos; la
-tokenización base heredada del #14 se mantiene para aislar la comparación.
+tokenización base heredada del #14 se mantuvo en el piloto del #15 para aislar
+la comparación. Al regenerar la corrida con el #16, ambas variantes usan la
+tokenización de lances vinculados y papeles rivales descrita en
+[ablacion-intervenciones-rivales.md](ablacion-intervenciones-rivales.md).
 
 `comparacion.json` enlaza `base/resultados.json` y
 `espacial/resultados.json` y resume errores y cobertura del vocabulario en

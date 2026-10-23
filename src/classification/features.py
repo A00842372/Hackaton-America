@@ -4,7 +4,7 @@ import math
 from collections import Counter
 from dataclasses import dataclass
 from statistics import median
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 
 LARGO_CAMPO = 120.0
@@ -13,10 +13,15 @@ UMBRAL_AVANCE_X = 5.0
 DISTANCIA_CORTA = 10.0
 DISTANCIA_MEDIA = 30.0
 AUXILIARES = {
-    "Ball Receipt*", "Camera On", "Camera Off", "Tactical Shift",
+    "Camera On", "Camera Off", "Tactical Shift",
     "Starting XI", "Half Start", "Half End",
 }
-AUXILIARES_VINCULADOS = {"Dribbled Past", "Foul Won"}
+CONTEXTUALES = {"Ball Receipt*", "Dribbled Past", "Pressure", "Foul Won"}
+CONTEXTUALES_ENTRE_EQUIPOS = {"Ball Receipt*", "Dribbled Past", "Foul Won"}
+CONTACTO = {"Duel", "Ball Recovery", "Interception", "Dispossessed"}
+PRIORIDAD_CONTACTO = {"Ball Recovery": 0, "Interception": 1, "Duel": 2, "Dispossessed": 3}
+ModoRivales = Literal["con_rivales", "sin_rivales"]
+FilaAccion = tuple[dict[str, Any], str, str]
 
 
 @dataclass(frozen=True)
@@ -51,12 +56,6 @@ def _punto(valor: Any) -> tuple[float, float] | None:
     return float(x), float(y)
 
 
-def _es_auxiliar(evento: dict[str, Any], tipo: str) -> bool:
-    return tipo in AUXILIARES or (
-        tipo in AUXILIARES_VINCULADOS and bool(evento.get("related_events"))
-    )
-
-
 def _actor(evento: dict[str, Any], protagonista: str) -> str:
     equipo = _nombre(evento.get("team"))
     return "propio" if equipo == protagonista else "rival" if equipo else "desconocido"
@@ -86,7 +85,84 @@ def _token_basico(evento: dict[str, Any], tipo: str, actor: str) -> str:
     return token
 
 
-def _banda_original(acciones: list[tuple[dict[str, Any], str, str]]) -> str:
+def _relacionados(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    a_rel = set(a.get("related_events") or [])
+    b_rel = set(b.get("related_events") or [])
+    return (
+        b.get("id") in a_rel or a.get("id") in b_rel or bool(a_rel & b_rel)
+    )
+
+
+def _contactos_redundantes(filas: list[FilaAccion]) -> tuple[set[int], dict[int, int]]:
+    """Elige un registro para cada lance simultáneo de contacto."""
+    omitidos: set[int] = set()
+    sustitutos: dict[int, int] = {}
+    pendientes = {i for i, (_, tipo, _) in enumerate(filas) if tipo in CONTACTO}
+    while pendientes:
+        inicio = min(pendientes)
+        grupo = {inicio}
+        frontera = [inicio]
+        while frontera:
+            actual = frontera.pop()
+            marca = filas[actual][0].get("timestamp")
+            if marca is None:
+                continue
+            vinculados = {
+                j for j in pendientes - grupo
+                if filas[j][0].get("timestamp") == marca
+                and _relacionados(filas[actual][0], filas[j][0])
+            }
+            grupo.update(vinculados)
+            frontera.extend(vinculados)
+        pendientes.difference_update(grupo)
+        if len(grupo) > 1:
+            elegido = min(grupo, key=lambda k: (
+                PRIORIDAD_CONTACTO[filas[k][1]],
+                _nombre(filas[k][0].get("team")) != _nombre(filas[k][0].get("possession_team")),
+                k,
+            ))
+            sustitutos[inicio] = elegido
+            omitidos.update(grupo - {inicio})
+    return omitidos, sustitutos
+
+
+def _contextuales_redundantes(filas: list[FilaAccion]) -> set[int]:
+    """Descarta contexto vinculado sin descartar acciones aisladas."""
+    principales = [
+        (evento, actor) for evento, tipo, actor in filas if tipo not in CONTEXTUALES
+    ]
+    contextuales_vistos: list[tuple[dict[str, Any], str]] = []
+    omitidos: set[int] = set()
+    for i, (evento, tipo, actor) in enumerate(filas):
+        if tipo not in CONTEXTUALES:
+            continue
+        if any((actor == otro_actor or tipo in CONTEXTUALES_ENTRE_EQUIPOS)
+               and _relacionados(evento, otra)
+               for otra, otro_actor in principales):
+            omitidos.add(i)
+            continue
+        if any(actor == otro_actor and evento.get("timestamp") is not None
+               and evento.get("timestamp") == otra.get("timestamp")
+               and _relacionados(evento, otra) for otra, otro_actor in contextuales_vistos):
+            omitidos.add(i)
+            continue
+        contextuales_vistos.append((evento, actor))
+    return omitidos
+
+
+def _acciones(eventos: list[dict[str, Any]], protagonista: str) -> list[FilaAccion]:
+    """Una acción por lance vinculado, conservando decisiones de balón distintas."""
+    filas = [
+        (evento, tipo, _actor(evento, protagonista))
+        for evento in eventos
+        if (tipo := _nombre(evento.get("type"))) and tipo not in AUXILIARES
+    ]
+    omitidos, sustitutos = _contactos_redundantes(filas)
+    omitidos.update(_contextuales_redundantes(filas))
+    return [filas[sustitutos.get(i, i)] for i in range(len(filas)) if i not in omitidos]
+
+
+def _banda_original(acciones: list[FilaAccion]) -> str:
     tiene_punto = False
     for evento, tipo, actor in acciones:
         if actor != "propio":
@@ -127,7 +203,7 @@ def _zona(punto: tuple[float, float] | None, config: ConfiguracionEspacial) -> s
 
 
 def _token_espacial(
-    evento: dict[str, Any], tipo: str, actor: str, reflejar: bool,
+    evento: dict[str, Any], tipo: str, actor: str, papel: str, reflejar: bool,
     config: ConfiguracionEspacial,
 ) -> str:
     origen, destino = _extremos(evento, tipo)
@@ -135,7 +211,7 @@ def _token_espacial(
     destino = _marco_protagonista(destino, actor, reflejar)
     zona_origen, zona_destino = _zona(origen, config), _zona(destino, config)
     token = (
-        f"{actor}:{tipo.replace(' ', '_')}:origen={zona_origen}"
+        f"{papel}:{tipo.replace(' ', '_')}:origen={zona_origen}"
         f":destino={zona_destino}"
     )
     if origen is None or destino is None or "fuera_campo" in (zona_origen, zona_destino):
@@ -156,21 +232,43 @@ def _ngramas(tokens: list[str], prefijo: str = "") -> Counter[str]:
 def representar_jugada(
     eventos: list[dict[str, Any]], protagonista: str,
     config: ConfiguracionEspacial | None = None,
+    *, modo_rivales: ModoRivales = "con_rivales",
 ) -> tuple[Counter[str], dict[str, Any]]:
     """Conserva los n-gramas base y añade los espaciales en un marco común."""
-    acciones = []
-    for evento in eventos:
-        tipo = _nombre(evento.get("type"))
-        if tipo and not _es_auxiliar(evento, tipo):
-            acciones.append((evento, tipo, _actor(evento, protagonista)))
+    if modo_rivales not in ("con_rivales", "sin_rivales"):
+        raise ValueError(f"Modo de rivales desconocido: {modo_rivales}")
+    acciones = _acciones(eventos, protagonista)
     banda = _banda_original(acciones)
     reflejar = banda == "y_alta"
-    basicos = [_token_basico(evento, tipo, actor) for evento, tipo, actor in acciones]
+    seleccionadas = []
+    rival_con_control: str | None = None
+    for evento, tipo, actor in acciones:
+        posesion = _nombre(evento.get("possession_team"))
+        if posesion == protagonista:
+            rival_con_control = None
+        if actor == "rival":
+            equipo = _nombre(evento.get("team"))
+            if posesion == equipo and rival_con_control != equipo:
+                papel = "rival_recuperacion"
+            elif posesion == equipo:
+                papel = "rival_control"
+            else:
+                papel = "rival_interrupcion"
+            if posesion == equipo:
+                rival_con_control = equipo
+        else:
+            papel = actor
+        if actor != "rival" or modo_rivales == "con_rivales":
+            seleccionadas.append((evento, tipo, actor, papel))
+    basicos = [
+        _token_basico(evento, tipo, papel)
+        for evento, tipo, _, papel in seleccionadas
+    ]
     rasgos = _ngramas(basicos)
     if config is not None:
         espaciales = [
-            _token_espacial(evento, tipo, actor, reflejar, config)
-            for evento, tipo, actor in acciones
+            _token_espacial(evento, tipo, actor, papel, reflejar, config)
+            for evento, tipo, actor, papel in seleccionadas
         ]
         for ngrama, cantidad in _ngramas(espaciales, "espacio:").items():
             rasgos[ngrama] = cantidad * config.peso

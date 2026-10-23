@@ -7,4 +7,5 @@ datos_preparados/
 datos_preparados_corpus/
 datos_clasificacion_exploratoria/
 datos_clasificacion_espacial/
+datos_clasificacion_rivales/
 .pytest_cache/

@@ -13,7 +13,7 @@ from sklearn.feature_extraction import DictVectorizer
 from sklearn.feature_extraction.text import TfidfTransformer
 
 from src.classification.features import (
-    ConfiguracionEspacial, DISTANCIA_CORTA, DISTANCIA_MEDIA, UMBRAL_AVANCE_X,
+    ConfiguracionEspacial, DISTANCIA_CORTA, DISTANCIA_MEDIA, ModoRivales, UMBRAL_AVANCE_X,
     representar_jugada, verificar_orientacion,
 )
 
@@ -77,6 +77,7 @@ def clasificar_muestra(
     n_componentes: int = 4,
     semilla: int = 42,
     configuracion_espacial: ConfiguracionEspacial | None = None,
+    modo_rivales: ModoRivales = "con_rivales",
 ) -> dict[str, Any]:
     """Ajusta dos NMF independientes y puntúa entrenamiento y partidos reservados.
 
@@ -98,6 +99,7 @@ def clasificar_muestra(
     for jugada in jugadas:
         jugada["ngramas"], metadatos = representar_jugada(
             jugada.pop("eventos"), jugada.pop("protagonista"), configuracion_espacial,
+            modo_rivales=modo_rivales,
         )
         jugada.update(metadatos)
     partidos = [int(ruta.parent.name.removeprefix("partido_")) for ruta in manifiestos]
@@ -122,7 +124,8 @@ def clasificar_muestra(
             "max_partidos": max_partidos, "n_componentes_solicitados": n_componentes,
             "semilla": semilla, "particion": "por_partido",
             "vectorizacion": "conteos_ngramas_2_3_tfidf_l2",
-            "tokenizacion": "acciones_desplazamientos_v1",
+            "tokenizacion": "acciones_desplazamientos_lances_v2",
+            "modo_rivales": modo_rivales,
             "umbrales_movimiento": {
                 "avance_x": UMBRAL_AVANCE_X,
                 "distancia_corta": DISTANCIA_CORTA,
@@ -277,16 +280,31 @@ def main() -> None:
     parser.add_argument("--semilla", type=int, default=42)
     parser.add_argument("--reservar-partido", type=int, action="append", dest="reservados")
     parser.add_argument("--comparar-espacio", action="store_true")
+    parser.add_argument("--comparar-rivales", action="store_true")
     parser.add_argument("--zonas-x", type=int, default=6)
     parser.add_argument("--zonas-y", type=int, default=4)
     parser.add_argument("--peso-espacial", type=float, default=1.0)
     args = parser.parse_args()
+    if args.comparar_espacio and args.comparar_rivales:
+        parser.error("Elige una sola comparación")
     if args.comparar_espacio:
         resumen = comparar_representaciones(
             args.ruta_corpus, args.ruta_salida,
             max_partidos=args.max_partidos, partidos_reservados=args.reservados,
             n_componentes=args.componentes, semilla=args.semilla,
             zonas_x=args.zonas_x, zonas_y=args.zonas_y, peso_espacial=args.peso_espacial,
+        )
+        total_jugadas = resumen["jugadas"]
+    elif args.comparar_rivales:
+        from src.classification.rival_ablation import comparar_rivales
+
+        resumen = comparar_rivales(
+            args.ruta_corpus, args.ruta_salida,
+            max_partidos=args.max_partidos, partidos_reservados=args.reservados,
+            n_componentes=args.componentes, semilla=args.semilla,
+            configuracion_espacial=ConfiguracionEspacial(
+                args.zonas_x, args.zonas_y, args.peso_espacial,
+            ),
         )
         total_jugadas = resumen["jugadas"]
     else:

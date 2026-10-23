@@ -71,7 +71,7 @@ def test_compara_zonas_reflejadas_sin_invertir_x_ni_modificar_eventos(tmp_path):
     }
     assert any("destino=sin_dato" in ngrama
                for modelo in espacial["modelos"].values() for ngrama in modelo["vocabulario"])
-    assert any("rival:Pressure:origen=x5_y3" in ngrama
+    assert any("rival_interrupcion:Pressure:origen=x5_y3" in ngrama
                for ngrama in espacial["modelos"]["balon_parado"]["vocabulario"])
     for categoria in ("balon_parado", "juego_abierto"):
         assert set(base["modelos"][categoria]["vocabulario"]) == {
