@@ -4,6 +4,8 @@ Proyecto de preparación y análisis exploratorio de jugadas a partir de eventos
 
 > **Estado actual:** el corpus preparado contiene 164,660 jugadas elegibles de 1,808 partidos. Las clasificaciones NMF y SVD + MiniBatchKMeans se conservaron para diagnóstico, pero **no son clases tácticas validadas**. Los nombres futbolísticos del notebook de equipos son interpretaciones aproximadas de sus n-gramas, no etiquetas oficiales ni una taxonomía definitiva.
 
+El [informe integral del proyecto](Informe_Integral_Proyecto_Jugadas.html) presenta el proceso completo en una página HTML autónoma, con gráficas, un comparador interactivo de equipos, metodología y límites. Incluye como estudio complementario el [informe táctico de América bajo André Jardine](America_Jardine_ISAC.html), conservando por separado las unidades y cohortes de ambos análisis.
+
 ## Qué permite hacer
 
 - Leer los archivos locales de eventos por competición, temporada y partido, sin exigir datos 360.
@@ -120,6 +122,7 @@ Abra [Analisis_Clasificaciones_Equipos.ipynb](Analisis_Clasificaciones_Equipos.i
 | `tests/` | Pruebas de preparación, clasificación, exportación y casos integrados. |
 | `docs/specs/` | Acuerdos funcionales y criterios de aceptación. |
 | `docs/implementation/` | Detalles de implementación y resultados de las evaluaciones. |
+| `Informe_Integral_Proyecto_Jugadas.html` | Informe visual autónomo del proceso, los resultados y el estudio complementario de Jardine. |
 
 ## Comprobación
 
