@@ -4,7 +4,7 @@ import argparse
 import json
 import math
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable, Literal, Mapping, Sequence
 
 import joblib
 import numpy as np
@@ -78,6 +78,24 @@ def _errores(matriz: Any, pesos: np.ndarray, componentes: np.ndarray) -> np.ndar
     norma_reconstruccion = np.sum((pesos @ (componentes @ componentes.T)) * pesos, axis=1)
     producto = np.sum(np.asarray(matriz @ componentes.T) * pesos, axis=1)
     return np.sqrt(np.maximum(0, norma_datos + norma_reconstruccion - 2 * producto))
+
+
+def proyectar_rasgos(
+    rasgos: Sequence[Mapping[str, float]], vectorizador: DictVectorizer,
+    transformador: TfidfTransformer, modelo: NMF,
+) -> tuple[np.ndarray, np.ndarray, list[float]]:
+    """Aplica el mismo vectorizador y NMF a jugadas del piloto o del lote."""
+    conteos = vectorizador.transform(rasgos)
+    matriz = transformador.transform(conteos)
+    pesos = modelo.transform(matriz)
+    errores = _errores(matriz, pesos, modelo.components_)
+    cobertura = [
+        sum(cantidad for ngrama, cantidad in fila.items()
+            if ngrama in vectorizador.vocabulary_) / sum(fila.values())
+        if fila else 0.0
+        for fila in rasgos
+    ]
+    return pesos, errores, cobertura
 
 
 def clasificar_muestra(
@@ -193,15 +211,9 @@ def clasificar_muestra(
         componentes = min(n_componentes, *matriz_train.shape)
         modelo = NMF(n_components=componentes, init="nndsvda", random_state=semilla, max_iter=500)
         modelo.fit(matriz_train)
-        conteos = vectorizador.transform([fila["ngramas"] for fila in filas])
-        matriz = tfidf.transform(conteos)
-        pesos = modelo.transform(matriz)
-        errores = _errores(matriz, pesos, modelo.components_)
-        cobertura = [
-            sum(cantidad for ngrama, cantidad in fila["ngramas"].items()
-                if ngrama in vectorizador.vocabulary_) / sum(fila["ngramas"].values())
-            for fila in filas
-        ]
+        pesos, errores, cobertura = proyectar_rasgos(
+            [fila["ngramas"] for fila in filas], vectorizador, tfidf, modelo,
+        )
         componentes_ids = [f"{categoria}_c{i:02d}" for i in range(1, componentes + 1)]
         archivo_modelo = f"modelo_{categoria}.joblib"
         resultado["modelos"][categoria] = {
