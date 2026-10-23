@@ -6,6 +6,8 @@ Proyecto de preparación y análisis exploratorio de jugadas a partir de eventos
 
 El [informe integral del proyecto](Informe_Integral_Proyecto_Jugadas.html) presenta el proceso completo en una página HTML autónoma, con gráficas, un comparador interactivo de equipos, metodología y límites. Incluye como estudio complementario el [informe táctico de América bajo André Jardine](America_Jardine_ISAC.html), conservando por separado las unidades y cohortes de ambos análisis.
 
+La [versión formal en LaTeX](reporte_latex/Reporte_Integral_Proyecto_Jugadas.tex) reúne el método, los resultados y los anexos. Está disponible también como [PDF](reporte_latex/Reporte_Integral_Proyecto_Jugadas.pdf). Las instrucciones de compilación y las figuras vectoriales están en [reporte_latex/README.md](reporte_latex/README.md).
+
 ## Qué permite hacer
 
 - Leer los archivos locales de eventos por competición, temporada y partido, sin exigir datos 360.
@@ -123,6 +125,7 @@ Abra [Analisis_Clasificaciones_Equipos.ipynb](Analisis_Clasificaciones_Equipos.i
 | `docs/specs/` | Acuerdos funcionales y criterios de aceptación. |
 | `docs/implementation/` | Detalles de implementación y resultados de las evaluaciones. |
 | `Informe_Integral_Proyecto_Jugadas.html` | Informe visual autónomo del proceso, los resultados y el estudio complementario de Jardine. |
+| `reporte_latex/` | Informe formal para PDF, figuras vectoriales, agregados y guía de compilación. |
 
 ## Comprobación
 
