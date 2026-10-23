@@ -1,0 +1,45 @@
+GUION PARA VIDEO — ANÁLISIS DE JUGADAS DE FÚTBOL
+Duración objetivo: 5 minutos. Texto de narración: aproximadamente 670 palabras.
+Las líneas «En pantalla» son apoyos visuales; no se leen en voz alta.
+
+[0:00–0:30] 1. Pregunta y alcance
+En pantalla: eventos sueltos → jugadas completas → patrones → equipos.
+
+Narración:
+¿Qué tipos de jugada utiliza un equipo? Un pase aislado no cuenta toda la historia. Este proyecto parte de eventos de StatsBomb y reconstruye secuencias completas: desde el control del balón hasta la pérdida de continuidad o la detención del juego. Busca patrones en el orden de las acciones y compara su frecuencia entre equipos, sin confundir frecuencia con eficacia.
+
+[0:30–1:15] 2. Preparación y reglas de una jugada
+En pantalla: Data_Preparation.IPYNB; esquema de manifiesto y archivo jugada_0001.json.
+
+Narración:
+EDA.IPYNB permite explorar y descargar los datos; Data_Preparation.IPYNB construye el corpus. Leemos los JSON de eventos por partido y los ordenamos por periodo e índice. Las posesiones de StatsBomb son el punto de partida, pero una jugada puede abarcar varias. Si el rival interviene y el equipo original recupera, unimos la secuencia cuando la intervención no supera tres segundos ni tres acciones relevantes. Una salida, detención o cambio de periodo corta la continuidad. Guardamos solo jugadas con al menos tres pases completados del protagonista: ni recepciones ni pases rivales cuentan. Sus eventos originales y un identificador quedan en el manifiesto del partido.
+
+[1:15–1:55] 3. Corpus y fases
+En pantalla: 1,808 partidos; 5,875,253 eventos; 164,660 jugadas; gráfico de fases.
+
+Narración:
+Procesamos 1,808 partidos de seis temporadas, entre 2021/2022 y 2026/2027, y 5 millones 875 mil eventos, sin partidos fallidos. Comprobamos que los eventos guardados y descartados concilien. Obtuvimos 164,660 jugadas elegibles; las secuencias demasiado cortas se auditan, pero no se clasifican. Distinguimos balón parado —córners, faltas y saques de banda— y juego abierto —juego regular, contraataques y otras reanudaciones—. Si una jugada cruza fases, solo se divide cuando cada tramo tiene tres pases completos. Hubo 751 cortes. El corpus final contiene 60,852 jugadas de balón parado y 103,808 de juego abierto. Los datos 360 son opcionales.
+
+[1:55–2:45] 4. Representación y modelos
+En pantalla: Pass → Carry → Pass; TF-IDF → SVD → MiniBatchKMeans; dos modelos separados.
+
+Narración:
+Convertimos las acciones en tokens: actor, tipo y, cuando hay coordenadas, dirección y distancia del movimiento. Formamos n-gramas de dos y tres acciones consecutivas para conservar orden. Los registros de un mismo lance no se cuentan dos veces. Probamos variantes con zona, posición, ritmo e intervenciones rivales. Los n-gramas alimentan una matriz TF-IDF; comparamos NMF, factorización de matriz no negativa, con TruncatedSVD y MiniBatchKMeans, por separado para cada fase. Probamos 32 y 64 dimensiones, cuatro tamaños de grupo y tres semillas. El piloto usa partidos distintos para entrenamiento y evaluación: treinta mil y seis mil jugadas, respectivamente. Revisamos silueta coseno, estabilidad, tamaño de grupos, n-gramas y ejemplos reales.
+
+[2:45–3:30] 5. Evaluación honesta
+En pantalla: ARI 0.408 / 0.485 frente al mínimo 0.75; sello «exploratorio».
+
+Narración:
+La evaluación reveló un límite: NMF separaba principalmente alternancias genéricas de pase y conducción. En SVD y KMeans, la estabilidad, medida con el índice de Rand ajustado, llegó a 0.408 en balón parado y 0.485 en juego abierto, por debajo del criterio de 0.75. Algunos grupos mezclan tipos de reanudación o se distinguen por presión y longitud del pase. Por eso no publicamos clases tácticas validadas. Para explorar, ajustamos el corpus completo con ocho grupos de balón parado y dieciséis de juego abierto. Si una jugada supera el umbral de distancia a su grupo cercano, queda «Sin patrón claro»: 8,243 casos, el cinco por ciento.
+
+[3:30–4:30] 6. Descubrimientos futbolísticos y equipos
+En pantalla: Analisis_Clasificaciones_Equipos.ipynb; barras por familia, jugada aproximada y matriz de equipos.
+
+Narración:
+Revisamos n-gramas y ejemplos de los 24 grupos y les asignamos nombres aproximados, como circulación lateral o pase atrás bajo presión. Los reunimos en familias sugeridas: circulación, progresión, reciclaje, bajo presión y una categoría mixta. En juego abierto, progresión suma 36,913 jugadas, el 35.56 por ciento de la fase; bajo presión, 27.90 por ciento; y circulación, 23.85. En balón parado lidera circulación, con 23.87 por ciento, seguida de reciclaje, con 21.54. La jugada aproximada más frecuente de juego abierto es «progresión con pases medios y apoyos laterales»: 11,337 secuencias. Circulación en juego abierto promedia 8.45 pases completados, frente a 5.67 bajo presión. El notebook muestra tablas y gráficas por jugada, familia y equipo. Por ejemplo, el pase largo de avance con apoyo posterior representa 8.19 por ciento de las jugadas abiertas de Querétaro, frente a 6.33 por ciento en el corpus de esa fase.
+
+[4:30–5:00] 7. Cierre y siguiente paso
+En pantalla: tabla de familias → ejemplo de eventos → advertencia de validación.
+
+Narración:
+Estos resultados describen patrones candidatos, no estilos confirmados ni eficacia. Los equipos tienen distinto número de partidos y la temporada 2026/2027 está incompleta; por eso usamos porcentajes dentro de fase y tamaños mínimos. Antes de nombrar clases tácticas definitivas, necesitamos revisar más jugadas completas, posiciones y contexto, y mejorar la estabilidad del modelo. Cada cifra puede rastrearse hasta sus eventos originales.

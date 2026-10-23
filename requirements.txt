@@ -6,3 +6,4 @@ scikit-learn
 python-dotenv
 ipykernel
 jupyterlab
+matplotlib
