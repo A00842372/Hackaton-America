@@ -4,7 +4,7 @@ import argparse
 import json
 import math
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 import joblib
 import numpy as np
@@ -93,6 +93,7 @@ def clasificar_muestra(
     posicion: bool = False,
     ritmo: bool = False,
     muestra_diversa: bool = False,
+    ponderacion: Literal["tfidf_l2", "frecuencia_l2"] = "tfidf_l2",
 ) -> dict[str, Any]:
     """Ajusta dos NMF independientes y puntúa entrenamiento y partidos reservados.
 
@@ -102,6 +103,8 @@ def clasificar_muestra(
     corpus, salida = Path(ruta_corpus), Path(ruta_salida)
     if n_componentes < 1 or max_partidos is not None and max_partidos < 2:
         raise ValueError("Se requieren al menos dos partidos y un componente")
+    if ponderacion not in ("tfidf_l2", "frecuencia_l2"):
+        raise ValueError(f"Ponderación desconocida: {ponderacion}")
     if salida.exists():
         raise FileExistsError(f"La salida ya existe: {salida}")
     manifiestos = sorted(corpus.glob("competicion_*/temporada_*/partido_*/manifiesto.json"))
@@ -147,7 +150,8 @@ def clasificar_muestra(
             "max_partidos": max_partidos, "n_componentes_solicitados": n_componentes,
             "muestra_diversa": muestra_diversa,
             "semilla": semilla, "particion": "por_partido",
-            "vectorizacion": "conteos_ngramas_2_3_tfidf_l2",
+            "vectorizacion": f"conteos_ngramas_2_3_{ponderacion}",
+            "ponderacion": ponderacion,
             "tokenizacion": "acciones_desplazamientos_lances_v2",
             "modo_rivales": modo_rivales,
             "posicion": posicion,
@@ -160,7 +164,7 @@ def clasificar_muestra(
                 "distancia_media": DISTANCIA_MEDIA,
             },
             "nmf_init": "nndsvda", "nmf_max_iter": 500,
-            "escala_pesos": "W cruda sobre TF-IDF L2; no son probabilidades",
+            "escala_pesos": f"W cruda sobre {ponderacion}; no son probabilidades",
             "representacion": representacion,
             "cuadricula": None if configuracion_espacial is None else {
                 "zonas_x": configuracion_espacial.zonas_x,
@@ -184,7 +188,7 @@ def clasificar_muestra(
             raise ValueError(f"Una jugada de {categoria} no tiene n-gramas de 2 o 3 acciones")
         vectorizador = DictVectorizer(sparse=True)
         conteos_train = vectorizador.fit_transform([fila["ngramas"] for fila in filas_train])
-        tfidf = TfidfTransformer(norm="l2")
+        tfidf = TfidfTransformer(norm="l2", use_idf=ponderacion == "tfidf_l2")
         matriz_train = tfidf.fit_transform(conteos_train)
         componentes = min(n_componentes, *matriz_train.shape)
         modelo = NMF(n_components=componentes, init="nndsvda", random_state=semilla, max_iter=500)
