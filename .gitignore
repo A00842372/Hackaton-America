@@ -14,4 +14,5 @@ datos_clasificacion_cronologia_diversa/
 datos_clasificacion_cronologia_semilla_43/
 datos_seleccion_componentes_piloto/
 datos_publicacion_clasificacion/
+datos_clasificacion_svd_kmeans*/
 .pytest_cache/
